@@ -79,8 +79,8 @@ class ProblemAttempt(db.Model):
 
 # --- SWAGGER MODELS ---
 problem_attempt_model = api.model('ProblemAttempt', {
-    'id': fields.Integer(required=True),
-    'name': fields.String(required=True),
+    'id': fields.Integer,
+    'name': fields.String,
     'attempts': fields.Integer,
     'bonusAttempt': fields.Raw,
     'topAttempt': fields.Raw
