@@ -96,7 +96,7 @@ climber_model = api.model('RegisteredClimber', {
 
 submission_model = api.model('ClimberPayload', {
     'registeredClimbers': fields.List(fields.Nested(climber_model), required=True),
-    'problemAttempts': fields.Raw(required=True)
+    'problemAttempts': fields.Raw
 })
 
 # --- ROUTES ---
