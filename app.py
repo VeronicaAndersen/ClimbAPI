@@ -172,6 +172,111 @@ class Submission(Resource):
             climber_list.append(climber_dict)
         return {"climbers": climber_list}, 200
 
+@ns.route('/<string:climber_id>/attempts')
+class ClimberAttemptsResource(Resource):
+    @token_required
+    def put(self, climber_id):
+        """Update attempts for a specific climber"""
+        try:
+            if not request.is_json:
+                raise BadRequest("Invalid JSON payload")
+
+            data = request.json
+            if 'attempts' not in data:
+                raise BadRequest("Missing 'attempts' field in payload")
+
+            attempts = data['attempts']
+
+            # Fetch the climber to ensure they exist
+            climber = Climber.query.get(climber_id)
+            if not climber:
+                return {"error": "Climber not found"}, 404
+
+            # Update or create attempts
+            for attempt in attempts:
+                problem_id = attempt['id']
+                db_attempt = ProblemAttempt.query.filter_by(
+                    climber_id=climber_id, problem_id=problem_id
+                ).first()
+
+                if db_attempt:
+                    # Update existing attempt
+                    db_attempt.name = attempt.get('name', db_attempt.name)
+                    db_attempt.attempts = attempt.get('attempts', db_attempt.attempts)
+                    db_attempt.bonus_attempt = attempt.get('bonusAttempt', db_attempt.bonus_attempt)
+                    db_attempt.top_attempt = attempt.get('topAttempt', db_attempt.top_attempt)
+                else:
+                    # Create new attempt if it doesn't exist
+                    db_attempt = ProblemAttempt(
+                        problem_id=problem_id,
+                        name=attempt['name'],
+                        attempts=attempt.get('attempts'),
+                        bonus_attempt=attempt.get('bonusAttempt'),
+                        top_attempt=attempt.get('topAttempt'),
+                        climber_id=climber_id
+                    )
+                    db.session.add(db_attempt)
+
+            # Commit changes
+            db.session.commit()
+            return {"message": "Attempts updated successfully"}, 200
+
+        except BadRequest as e:
+            return {"error": str(e)}, 400
+        except Exception as e:
+            db.session.rollback()
+            return {"error": "Unexpected error", "details": str(e)}, 500
+
+@ns.route('/<string:climber_id>')
+class ClimberResource(Resource):
+    @token_required
+    def put(self, climber_id):
+        """Update a climber's data"""
+        try:
+            if not request.is_json:
+                raise BadRequest("Invalid JSON payload")
+
+            data = request.json
+
+            # Fetch the climber by ID
+            climber = Climber.query.get(climber_id)
+            if not climber:
+                return {"error": "Climber not found"}, 404
+
+            # Update climber fields
+            climber.name = data.get('name', climber.name)
+            climber.email = data.get('email', climber.email)
+            climber.date = data.get('date', climber.date)
+            climber.selected_grade = data.get('selectedGrade', climber.selected_grade)
+
+            # Commit changes
+            db.session.commit()
+            return {"message": "Climber updated successfully"}, 200
+
+        except BadRequest as e:
+            return {"error": str(e)}, 400
+        except Exception as e:
+            db.session.rollback()
+            return {"error": "Unexpected error", "details": str(e)}, 500
+
+    @token_required
+    def delete(self, climber_id):
+        """Delete a climber and their associated attempts"""
+        try:
+            # Fetch the climber by ID
+            climber = Climber.query.get(climber_id)
+            if not climber:
+                return {"error": "Climber not found"}, 404
+
+            # Delete the climber and their associated attempts
+            db.session.delete(climber)
+            db.session.commit()
+            return {"message": "Climber and associated attempts deleted successfully"}, 200
+
+        except Exception as e:
+            db.session.rollback()
+            return {"error": "Unexpected error", "details": str(e)}, 500
+
 # --- INIT DB ---
 with app.app_context():
     db.create_all()
