@@ -92,7 +92,7 @@ rpds-py==0.24.0
 rsa==4.9
 scramp==1.4.5
 six==1.17.0
--e git+https://github.com/MDLabs/SleepLabels.git@775fce676303d1c6c7390b9eab56f20057dbf466#egg=sleepcore&subdirectory=sleepcore
+# -e git+https://github.com/MDLabs/SleepLabels.git@775fce676303d1c6c7390b9eab56f20057dbf466#egg=sleepcore&subdirectory=sleepcore
 sniffio==1.3.1
 SQLAlchemy==2.0.40
 SQLAlchemy-Utils==0.41.2
