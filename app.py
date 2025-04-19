@@ -232,6 +232,37 @@ class ClimberAttemptsResource(Resource):
 
 @ns.route('/<string:climber_id>')
 class ClimberResource(Resource):
+    @token_required
+    def get(self, climber_id):
+        """Fetch a climber and their attempts by ID"""
+        try:
+            # Fetch the climber by ID
+            climber = Climber.query.get(climber_id)
+            if not climber:
+                return {"error": "Climber not found"}, 404
+
+            # Build the climber's data
+            climber_dict = {
+                "id": climber.id,
+                "name": climber.name,
+                "email": climber.email,
+                "date": climber.date,
+                "selectedGrade": climber.selected_grade,
+                "attempts": [
+                    {
+                        "id": a.problem_id,
+                        "name": a.name,
+                        "attempts": a.attempts,
+                        "bonusAttempt": a.bonus_attempt,
+                        "topAttempt": a.top_attempt
+                    } for a in climber.attempts
+                ]
+            }
+            return climber_dict, 200
+
+        except Exception as e:
+            return {"error": "Unexpected error", "details": str(e)}, 500
+
     @ns.expect(api.model('UpdateClimberPayload', {
         'name': fields.String,
         'email': fields.String,
