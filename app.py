@@ -174,6 +174,9 @@ class Submission(Resource):
 
 @ns.route('/<string:climber_id>/attempts')
 class ClimberAttemptsResource(Resource):
+    @ns.expect(api.model('UpdateAttemptsPayload', {
+        'attempts': fields.List(fields.Nested(problem_attempt_model), required=True)
+    }))
     @token_required
     def put(self, climber_id):
         """Update attempts for a specific climber"""
@@ -229,6 +232,12 @@ class ClimberAttemptsResource(Resource):
 
 @ns.route('/<string:climber_id>')
 class ClimberResource(Resource):
+    @ns.expect(api.model('UpdateClimberPayload', {
+        'name': fields.String,
+        'email': fields.String,
+        'date': fields.String,
+        'selectedGrade': fields.Integer
+    }))
     @token_required
     def put(self, climber_id):
         """Update a climber's data"""
