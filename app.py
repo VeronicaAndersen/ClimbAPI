@@ -2,11 +2,15 @@ from functools import wraps
 from flask import Flask, request, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_restx import Api, Resource, fields
-from flask_cors import CORS  # Import CORS
+from flask_cors import CORS
 from werkzeug.exceptions import BadRequest
+import bcrypt  # Correct import for bcrypt
+import jwt  # Correct import for JWT
 import uuid
 from dotenv import load_dotenv
 import os
+
+
 load_dotenv()
 
 # --- APP & DB SETUP ---
@@ -37,6 +41,7 @@ api = Api(
     security='Bearer'  # applies to all endpoints unless overridden
 )
 ns = api.namespace('Climbers', description='Data submission operations')
+user_ns = api.namespace('Users', description='User operations')
 
 
 def token_required(f):
@@ -48,10 +53,20 @@ def token_required(f):
         
         try:
             scheme, token = auth_header.split()
-            if scheme.lower() != 'bearer' or token != SECRET_TOKEN:
-                abort(401, description="Invalid or missing token")
-        except ValueError:
-            abort(401, description="Invalid Authorization format. Use 'Bearer <token>'.")
+            if scheme.lower() != 'bearer':
+                abort(401, description="Invalid Authorization scheme")
+
+            # Decode the token
+            decoded_token = jwt.decode(token, SECRET_TOKEN, algorithms=["HS256"])
+            request.user = decoded_token['username']  # Attach the username to the request
+
+            # Fetch the user's role from the database
+            user = User.query.filter_by(username=request.user).first()
+            if not user:
+                abort(401, description="Invalid token")
+            request.user_role = user.role  # Attach the user's role to the request
+        except (ValueError, jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+            abort(401, description="Invalid or expired token")
 
         return f(*args, **kwargs)
     return decorated
@@ -77,6 +92,12 @@ class ProblemAttempt(db.Model):
 
     climber_id = db.Column(db.String(100), db.ForeignKey('climber.id'), nullable=False)
 
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password = db.Column(db.String(200), nullable=False)
+    role = db.Column(db.String(20), nullable=False, default='climber')  # Default role is 'climber'
+
 # --- SWAGGER MODELS ---
 problem_attempt_model = api.model('ProblemAttempt', {
     'id': fields.Integer,
@@ -97,6 +118,11 @@ climber_model = api.model('RegisteredClimber', {
 submission_model = api.model('ClimberPayload', {
     'registeredClimbers': fields.List(fields.Nested(climber_model), required=True),
     'problemAttempts': fields.Raw
+})
+
+user_model = api.model('User', {
+    'username': fields.String(required=True),
+    'password': fields.String(required=True)
 })
 
 # --- ROUTES ---
@@ -234,34 +260,32 @@ class ClimberAttemptsResource(Resource):
 class ClimberResource(Resource):
     @token_required
     def get(self, climber_id):
-        """Fetch a climber and their attempts by ID"""
-        try:
-            # Fetch the climber by ID
-            climber = Climber.query.get(climber_id)
-            if not climber:
-                return {"error": "Climber not found"}, 404
+        """Fetch a climber's data (admin or the climber themselves)"""
+        climber = Climber.query.get(climber_id)
+        if not climber:
+            return {"error": "Climber not found"}, 404
 
-            # Build the climber's data
-            climber_dict = {
-                "id": climber.id,
-                "name": climber.name,
-                "email": climber.email,
-                "date": climber.date,
-                "selectedGrade": climber.selected_grade,
-                "attempts": [
-                    {
-                        "id": a.problem_id,
-                        "name": a.name,
-                        "attempts": a.attempts,
-                        "bonusAttempt": a.bonus_attempt,
-                        "topAttempt": a.top_attempt
-                    } for a in climber.attempts
-                ]
-            }
-            return climber_dict, 200
+        # Allow access if the user is an admin or the climber themselves
+        if request.user_role != 'admin' and climber_id != request.user:
+            return {"error": "Access forbidden: You can only view your own data"}, 403
 
-        except Exception as e:
-            return {"error": "Unexpected error", "details": str(e)}, 500
+        climber_dict = {
+            "id": climber.id,
+            "name": climber.name,
+            "email": climber.email,
+            "date": climber.date,
+            "selectedGrade": climber.selected_grade,
+            "attempts": [
+                {
+                    "id": a.problem_id,
+                    "name": a.name,
+                    "attempts": a.attempts,
+                    "bonusAttempt": a.bonus_attempt,
+                    "topAttempt": a.top_attempt
+                } for a in climber.attempts
+            ]
+        }
+        return climber_dict, 200
 
     @ns.expect(api.model('UpdateClimberPayload', {
         'name': fields.String,
@@ -317,10 +341,109 @@ class ClimberResource(Resource):
             db.session.rollback()
             return {"error": "Unexpected error", "details": str(e)}, 500
 
+@ns.route('/all-climbers')
+class AllClimbers(Resource):
+    @token_required
+    def get(self):
+        """Admin-only: Fetch all climbers"""
+        if request.user_role != 'admin':
+            return {"error": "Access forbidden: Admins only"}, 403
+
+        climbers = Climber.query.all()
+        climber_list = [
+            {
+                "id": climber.id,
+                "name": climber.name,
+                "email": climber.email,
+                "date": climber.date,
+                "selectedGrade": climber.selected_grade
+            } for climber in climbers
+        ]
+        return {"climbers": climber_list}, 200
+
+@user_ns.route('/register')
+class UserRegister(Resource):
+    @user_ns.expect(api.model('UserRegister', {
+        'username': fields.String(required=True),
+        'password': fields.String(required=True),
+        'role': fields.String(default='climber', enum=['admin', 'climber'])  # Optional role field
+    }))
+    @token_required
+    def post(self):
+        """Register a new user (admin-only for creating admins)"""
+        try:
+            data = request.json
+            username = data['username']
+            password = data['password']
+            role = data.get('role', 'climber')
+
+            # Ensure only admins can create other admins
+            if request.user_role != 'admin' and role == 'admin':
+                return {"error": "Only admins can create admin users"}, 403
+
+            # Check if the username already exists
+            if User.query.filter_by(username=username).first():
+                return {"error": "Username already exists"}, 400
+
+            # Hash the password and create a new user
+            hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+            user = User(username=username, password=hashed_password.decode('utf-8'), role=role)
+            db.session.add(user)
+            db.session.commit()
+
+            return {"message": "User registered successfully"}, 201
+
+        except Exception as e:
+            db.session.rollback()
+            return {"error": "Unexpected error", "details": str(e)}, 500
+
+
+@user_ns.route('/login')
+class UserLogin(Resource):
+    @user_ns.expect(user_model)
+    def post(self):
+        """Log in a user and return a token"""
+        try:
+            data = request.json
+            username = data['username']
+            password = data['password']
+
+            # Fetch the user by username
+            user = User.query.filter_by(username=username).first()
+            if not user or not bcrypt.checkpw(password.encode('utf-8'), user.password.encode('utf-8')):
+                return {"error": "Invalid username or password"}, 401
+
+            # Generate a token with the user's role
+            token = jwt.encode({"username": username, "role": user.role}, SECRET_TOKEN, algorithm="HS256")
+            return {"token": token}, 200
+
+        except Exception as e:
+            return {"error": "Unexpected error", "details": str(e)}, 500
+
+@user_ns.route('/all')
+class GetAllUsers(Resource):
+    @token_required
+    def get(self):
+        """Admin-only: Fetch all users"""
+        if request.user_role != 'admin':
+            return {"error": "Access forbidden: Admins only"}, 403
+
+        users = User.query.all()
+        user_list = [
+            {
+                "id": user.id,
+                "username": user.username,
+                "role": user.role
+            } for user in users
+        ]
+        return {"users": user_list}, 200
+
 # --- INIT DB ---
 with app.app_context():
     db.create_all()
 
+api.add_namespace(user_ns, path='/Users')
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))  # fallback for local
+    port = int(os.environ.get('PORT', 5000))
     app.run(debug=True, host='0.0.0.0', port=port)
