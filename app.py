@@ -29,7 +29,7 @@ api.add_namespace(grades_ns, path='/Grades')  # Register the grades namespace
 # --- INIT DB ---
 with app.app_context():
     db.create_all()  # Create database tables
-    # db.drop_all()  # Uncomment this line to drop all tables (use with caution)
+    db.drop_all()  # Uncomment this line to drop all tables (use with caution)
 
     # Add default climbers
     default_climbers = [
