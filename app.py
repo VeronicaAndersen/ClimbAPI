@@ -28,18 +28,18 @@ api.add_namespace(grades_ns, path='/Grades')  # Register the grades namespace
 
 # --- INIT DB ---
 with app.app_context():
+    # db.drop_all()  # Uncomment this line to drop all tables (use with caution)
     db.create_all()  # Create database tables
-    db.drop_all()  # Uncomment this line to drop all tables (use with caution)
 
     # Add default climbers
-    default_climbers = [
-        Climber(name='v', role="admin", selected_grade="Orange", password='v'),
-    ]
+    # default_climbers = [
+    #     Climber(name='v', role="admin", selected_grade="Orange", password='v'),
+    # ]
 
-    for climber in default_climbers:
-        # Hash the password before saving
-        climber.set_password(climber.password)
-        db.session.add(climber)
+    # for climber in default_climbers:
+    #     # Hash the password before saving
+    #     climber.set_password(climber.password)
+    #     db.session.add(climber)
 
     db.session.commit()
 
