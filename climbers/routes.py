@@ -33,7 +33,7 @@ def admin_required(f):
     @wraps(f)
     def decorated_function(current_user, *args, **kwargs):
         # Check if the user has the 'admin' role
-        if current_user.role != 'admin':
+        if current_user.roles != 'admin':
             return {"error": "Access denied. Admins only."}, 403
         return f(current_user, *args, **kwargs)
     return decorated_function
@@ -52,7 +52,7 @@ problem_attempt_model = climbers_ns.model('ProblemAttempt', {
 climber_registration_model = climbers_ns.model('ClimberRegistration', {
     'name': fields.String(required=True, description="Name of the climber"),
     'password': fields.String(required=True, description="Password for the climber"),
-    'role': fields.String(required=True, description="Role of the climber (e.g., 'climber', 'admin')"),
+    'roles': fields.String(required=True, description="Role of the climber (e.g., 'climber', 'admin')"),
     'grade': fields.String(required=True, description=f"Grade of the climber (e.g., {', '.join(GRADES)})")
 })
 
@@ -81,12 +81,12 @@ class ClimberRegistration(Resource):
             data = request.json
             name = data.get('name')
             password = data.get('password')
-            role = data.get('role')
+            roles = data.get('roles')
             grade = data.get('grade')
 
             # Validate role
             valid_roles = {'climber', 'admin'}
-            if role not in valid_roles:
+            if roles not in valid_roles:
                 raise BadRequest(f"Invalid role. Valid roles are: {', '.join(valid_roles)}")
 
             # Validate grade
@@ -101,6 +101,7 @@ class ClimberRegistration(Resource):
             new_climber = Climber(
                 name=name,
                 password='',  # Will be set using set_password
+                roles=roles,
                 selected_grade=grade
             )
             new_climber.set_password(password)  # Hash and set the password
@@ -109,7 +110,7 @@ class ClimberRegistration(Resource):
 
             return {"message": "Climber registered successfully", "climber": {
                 "name": new_climber.name,
-                "role": role,
+                "roles": roles,
                 "grade": new_climber.selected_grade
             }}, 201
 
@@ -147,7 +148,7 @@ class ClimberLogin(Resource):
             secret_key = os.getenv('SECRET_KEY', 'default_secret')
             token = jwt.encode({'id': climber.id, 'name': climber.name}, secret_key, algorithm='HS256')
 
-            return {"message": "Login successful", "token": token}, 200
+            return {"message": "Login successful", "name": name, "token": token}, 200
 
         except BadRequest as e:
             return {"error": str(e)}, 400
@@ -229,9 +230,9 @@ class ClimberUpdate(Resource):
 class GetAllClimbers(Resource):
     @climbers_ns.response(200, "List of all climbers retrieved successfully")
     @climbers_ns.response(403, "Access denied. Admins only.")
-    @token_required
-    @admin_required
-    def get(self, current_user):
+    # @token_required
+    # @admin_required
+    def get(self):
         """Get all climbers (Admins only)"""
         try:
             climbers = Climber.query.all()

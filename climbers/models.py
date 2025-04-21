@@ -9,7 +9,7 @@ class Climber(db.Model):
     name = db.Column(db.String(100), nullable=False)
     selected_grade = db.Column(db.String(20), nullable=False)
     password = db.Column(db.String(200), nullable=False)
-    role = db.Column(db.String(20), nullable=False, default='climber') 
+    roles = db.Column(db.String(20), nullable=False, default='climber') 
 
     attempts = db.relationship('ProblemAttempt', backref='climber', lazy=True)
 
