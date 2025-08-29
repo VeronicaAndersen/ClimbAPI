@@ -33,8 +33,9 @@ def admin_required(f):
     @wraps(f)
     def decorated_function(current_user, *args, **kwargs):
         # Check if the user has the 'admin' role
-        if current_user.roles != 'admin':
+        if current_user.roles != 'Admin':
             return {"error": "Access denied. Admins only."}, 403
+        print(current_user.roles)
         return f(current_user, *args, **kwargs)
     return decorated_function
 
@@ -42,7 +43,6 @@ climbers_ns = Namespace('Climbers', description='Climber operations')
 
 # Swagger models
 problem_attempt_model = climbers_ns.model('ProblemAttempt', {
-    'id': fields.Integer(required=True, description="ID of the problem"),
     'name': fields.String(required=True, description="Name of the problem"),
     'attempts': fields.Integer(required=False, description="Number of attempts"),
     'bonusAttempt': fields.Integer(required=False, description="Number of bonus attempts"),
@@ -52,7 +52,7 @@ problem_attempt_model = climbers_ns.model('ProblemAttempt', {
 climber_registration_model = climbers_ns.model('ClimberRegistration', {
     'name': fields.String(required=True, description="Name of the climber"),
     'password': fields.String(required=True, description="Password for the climber"),
-    'roles': fields.String(required=True, description="Role of the climber (e.g., 'climber', 'admin')"),
+    'roles': fields.String(required=True, description="Role of the user (e.g., 'Climber', 'Admin')"),
     'grade': fields.String(required=True, description=f"Grade of the climber (e.g., {', '.join(GRADES)})")
 })
 
@@ -85,7 +85,7 @@ class ClimberRegistration(Resource):
             grade = data.get('grade')
 
             # Validate role
-            valid_roles = {'climber', 'admin'}
+            valid_roles = {'Climber', 'Admin'}
             if roles not in valid_roles:
                 raise BadRequest(f"Invalid role. Valid roles are: {', '.join(valid_roles)}")
 
@@ -228,10 +228,10 @@ class ClimberUpdate(Resource):
 
 @climbers_ns.route('/all')
 class GetAllClimbers(Resource):
-    @climbers_ns.response(200, "List of all climbers retrieved successfully")
-    @climbers_ns.response(403, "Access denied. Admins only.")
-    # @token_required
+    @token_required
     # @admin_required
+    @climbers_ns.response(200, "List of all climbers retrieved successfully")
+    # @climbers_ns.response(403, "Access denied. Admins only.")
     def get(self):
         """Get all climbers (Admins only)"""
         try:
@@ -255,6 +255,37 @@ class GetAllClimbers(Resource):
                 for climber in climbers
             ]
             return {"climbers": climber_list}, 200
+
+        except Exception as e:
+            return {"error": "Unexpected error", "details": str(e)}, 500
+
+@climbers_ns.route('/Climber/<string:climber_id>')
+class GetClimberByID(Resource):
+    @climbers_ns.response(200, "Climber details retrieved successfully")
+    @climbers_ns.response(404, "Climber not found")
+    def get(self, climber_id):
+        """Get climber details by ID"""
+        try:
+            climber = Climber.query.filter_by(id=climber_id).first()
+            if not climber:
+                return {"error": "Climber not found"}, 404
+
+            climber_data = {
+                "id": climber.id,
+                "name": climber.name,
+                "selected_grade": climber.selected_grade,
+                "problemAttempts": [
+                    {
+                        "id": attempt.problem_id,
+                        "name": attempt.name,
+                        "attempts": attempt.attempts,
+                        "bonusAttempt": attempt.bonus_attempt,
+                        "topAttempt": attempt.top_attempt
+                    }
+                    for attempt in climber.attempts
+                ]
+            }
+            return {"climber": climber_data}, 200
 
         except Exception as e:
             return {"error": "Unexpected error", "details": str(e)}, 500
