@@ -50,7 +50,6 @@ problem_attempt_model = climbers_ns.model('ProblemAttempt', {
 })
 
 climber_registration_model = climbers_ns.model('ClimberRegistration', {
-    'id': fields.String(required=True, description="Unique identifier for the climber (auto-generated if not provided)"),
     'name': fields.String(required=True, description="Name of the climber"),
     'password': fields.String(required=True, description="Password for the climber"),
     'roles': fields.String(required=True, description="Role of the user (e.g., 'Climber', 'Admin')"),
@@ -80,7 +79,7 @@ class ClimberRegistration(Resource):
                 raise BadRequest("Invalid JSON payload")
 
             data = request.json
-            id = uuid.uuid4()
+            id = str(uuid.uuid4())
             name = data.get('name')
             password = data.get('password')
             roles = data.get('roles')
@@ -111,12 +110,15 @@ class ClimberRegistration(Resource):
             db.session.add(new_climber)
             db.session.commit()
 
-            return {"message": "Climber registered successfully", "climber": {
-                "id": new_climber.id,
-                "name": new_climber.name,
-                "roles": roles,
-                "grade": new_climber.selected_grade
-            }}, 201
+            return {
+                "message": "Climber registered successfully",
+                "climber": {
+                    "id": str(new_climber.id),   
+                    "name": new_climber.name,
+                    "roles": roles,
+                    "grade": new_climber.selected_grade
+                }
+}, 201
 
         except BadRequest as e:
             return {"error": str(e)}, 400
@@ -136,12 +138,12 @@ class ClimberLogin(Resource):
                 raise BadRequest("Invalid JSON payload")
 
             data = request.json
-            id = data.get('id')
             name = data.get('name')
             password = data.get('password')
 
             # Check if the climber exists
             climber = Climber.query.filter_by(name=name).first()
+            id = str(climber.id)
             if not climber:
                 return {"error": "Invalid name or password"}, 401
 
@@ -151,7 +153,7 @@ class ClimberLogin(Resource):
 
             # Generate a JWT token
             secret_key = os.getenv('SECRET_KEY', 'default_secret')
-            token = jwt.encode({'id': climber.id, 'name': climber.name}, secret_key, algorithm='HS256')
+            token = jwt.encode({'name': climber.name}, secret_key, algorithm='HS256')
 
             return {"message": "Login successful","id": id, "name": name, "token": token}, 200
 
@@ -214,7 +216,7 @@ class ClimberUpdate(Resource):
                     "grade": current_user.selected_grade,
                     "problemAttempts": [
                         {
-                            "id": attempt.problem_id,
+                            "id": str(attempt.problem_id),
                             "name": attempt.name,
                             "attempts": attempt.attempts,
                             "bonusAttempt": attempt.bonus_attempt,
@@ -243,12 +245,12 @@ class GetAllClimbers(Resource):
             climbers = Climber.query.all()
             climber_list = [
                 {
-                    # "id": climber.id,
+                    "id": str(climber.id),
                     "name": climber.name,
                     "selected_grade": climber.selected_grade,
                     "problemAttempts": [
                         {
-                            "id": attempt.problem_id,
+                            "id": str(attempt.problem_id),
                             "name": attempt.name,
                             "attempts": attempt.attempts,
                             "bonusAttempt": attempt.bonus_attempt,
@@ -272,24 +274,25 @@ class GetClimberByID(Resource):
         """Get climber details by ID"""
         try:
             climber = Climber.query.filter_by(id=climber_id).first()
+
             if not climber:
                 return {"error": "Climber not found"}, 404
 
             climber_data = {
-                "id": climber.id,
+                "id": str(climber.id),
                 "name": climber.name,
                 "selected_grade": climber.selected_grade,
                 "problemAttempts": [
                     {
-                        "id": attempt.problem_id,
+                        "id": str(attempt.problem_id),
                         "name": attempt.name,
                         "attempts": attempt.attempts,
                         "bonusAttempt": attempt.bonus_attempt,
                         "topAttempt": attempt.top_attempt
                     }
                     for attempt in climber.attempts
-                ]
-            }
+    ]
+}
             return {"climber": climber_data}, 200
 
         except Exception as e:

@@ -31,11 +31,11 @@ api.add_namespace(competitions_ns, path='/Competitions')  # Register the competi
 
 # --- INIT DB ---
 with app.app_context():
-    db.drop_all()  # Uncomment this line to drop all tables (use with caution)
+    # db.drop_all()  # Uncomment this line to drop all tables (use with caution)
     db.create_all()  # Create database tables
 
     # Add climber with admin role
-    default_climber = Climber(id=uuid.uuid4(), name='v', selected_grade='Gul', roles='Admin')
+    default_climber = Climber(name='v', selected_grade='Gul', roles='Admin')
     default_climber.set_password('v')
     db.session.add(default_climber)
 
