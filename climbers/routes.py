@@ -1,3 +1,4 @@
+import uuid
 from flask_restx import Namespace, Resource, fields
 from flask import request
 from grades.routes import GRADES
@@ -7,7 +8,6 @@ from climbers.models import Climber, ProblemAttempt
 from functools import wraps
 import jwt
 from werkzeug.exceptions import Unauthorized
-import jwt
 import os
 
 # Define the token_required decorator
@@ -50,6 +50,7 @@ problem_attempt_model = climbers_ns.model('ProblemAttempt', {
 })
 
 climber_registration_model = climbers_ns.model('ClimberRegistration', {
+    'id': fields.String(required=True, description="Unique identifier for the climber (auto-generated if not provided)"),
     'name': fields.String(required=True, description="Name of the climber"),
     'password': fields.String(required=True, description="Password for the climber"),
     'roles': fields.String(required=True, description="Role of the user (e.g., 'Climber', 'Admin')"),
@@ -79,6 +80,7 @@ class ClimberRegistration(Resource):
                 raise BadRequest("Invalid JSON payload")
 
             data = request.json
+            id = uuid.uuid4()
             name = data.get('name')
             password = data.get('password')
             roles = data.get('roles')
@@ -99,6 +101,7 @@ class ClimberRegistration(Resource):
 
             # Create a new climber
             new_climber = Climber(
+                id = id,
                 name=name,
                 password='',  # Will be set using set_password
                 roles=roles,
@@ -109,6 +112,7 @@ class ClimberRegistration(Resource):
             db.session.commit()
 
             return {"message": "Climber registered successfully", "climber": {
+                "id": new_climber.id,
                 "name": new_climber.name,
                 "roles": roles,
                 "grade": new_climber.selected_grade
@@ -132,6 +136,7 @@ class ClimberLogin(Resource):
                 raise BadRequest("Invalid JSON payload")
 
             data = request.json
+            id = data.get('id')
             name = data.get('name')
             password = data.get('password')
 
@@ -148,7 +153,7 @@ class ClimberLogin(Resource):
             secret_key = os.getenv('SECRET_KEY', 'default_secret')
             token = jwt.encode({'id': climber.id, 'name': climber.name}, secret_key, algorithm='HS256')
 
-            return {"message": "Login successful", "name": name, "token": token}, 200
+            return {"message": "Login successful","id": id, "name": name, "token": token}, 200
 
         except BadRequest as e:
             return {"error": str(e)}, 400
@@ -238,7 +243,7 @@ class GetAllClimbers(Resource):
             climbers = Climber.query.all()
             climber_list = [
                 {
-                    "id": climber.id,
+                    # "id": climber.id,
                     "name": climber.name,
                     "selected_grade": climber.selected_grade,
                     "problemAttempts": [

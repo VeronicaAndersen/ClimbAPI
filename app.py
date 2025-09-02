@@ -1,3 +1,4 @@
+import uuid
 from climbers.models import Climber
 from flask import Flask
 from flask_cors import CORS
@@ -34,7 +35,7 @@ with app.app_context():
     db.create_all()  # Create database tables
 
     # Add climber with admin role
-    default_climber = Climber(name='v', selected_grade='Gul', roles='Admin')
+    default_climber = Climber(id=uuid.uuid4(), name='v', selected_grade='Gul', roles='Admin')
     default_climber.set_password('v')
     db.session.add(default_climber)
 
