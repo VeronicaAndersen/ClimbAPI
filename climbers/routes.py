@@ -235,7 +235,7 @@ class ClimberUpdate(Resource):
 
 @climbers_ns.route('/all')
 class GetAllClimbers(Resource):
-    @token_required
+    # @token_required
     # @admin_required
     @climbers_ns.response(200, "List of all climbers retrieved successfully")
     # @climbers_ns.response(403, "Access denied. Admins only.")

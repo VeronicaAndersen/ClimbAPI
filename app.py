@@ -35,9 +35,9 @@ with app.app_context():
     db.create_all()  # Create database tables
 
     # Add climber with admin role
-    default_climber = Climber(name='v', selected_grade='Gul', roles='Admin')
-    default_climber.set_password('v')
-    db.session.add(default_climber)
+    # default_climber = Climber(name='v', selected_grade='Gul', roles='Admin')
+    # default_climber.set_password('v')
+    # db.session.add(default_climber)
 
     db.session.commit()
 
