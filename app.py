@@ -1,47 +1,59 @@
-import uuid
-from climbers.models import Climber
-from flask import Flask
 from flask_cors import CORS
-from flask_migrate import Migrate
-from extensions import db, api
-from climbers.routes import climbers_ns
-from grades.routes import grades_ns  # Import the grades namespace
-from competitions.routes import competitions_ns  # Import the competitions namespace
+from flask import Flask
+from flask_restx import Api
+from extensions import db, migrate
+from routes.climbers import climbers_ns
+from routes.competitions import competitions_ns
+from routes.problems import problems_ns
+from routes.problem_attempts import problem_attempts_ns
+from routes.grades import grades_ns
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
+DEV_ORIGINS = ["http://localhost:8080", "http://127.0.0.1:8080"]
 
-# --- APP SETUP ---
-app = Flask(__name__, instance_relative_config=True)  # Enable instance folder
-CORS(app)
+authorizations = {
+    "Bearer Auth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Authorization",
+        "description": "Enter token like: **Bearer &lt;your_JWT_token&gt;**",
+    }
+}
 
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+def create_app():
+    app = Flask(__name__)
+    app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv('SQLALCHEMY_DATABASE_URI')
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-# Initialize extensions
-db.init_app(app)
-migrate = Migrate(app, db)  # Initialize Flask-Migrate
-api.init_app(app)
+    CORS(
+        app,
+        resources={r"/*": {"origins": DEV_ORIGINS}},
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization"],
+        expose_headers=["Content-Type"],
+    )
 
-# Register namespaces
-api.add_namespace(climbers_ns, path='/Climbers')
-api.add_namespace(grades_ns, path='/Grades')
-api.add_namespace(competitions_ns, path='/Competitions')  # Register the competitions namespace
+    db.init_app(app)
+    migrate.init_app(app, db)
 
-# --- INIT DB ---
-with app.app_context():
-    # db.drop_all()  # Uncomment this line to drop all tables (use with caution)
-    db.create_all()  # Create database tables
+    api = Api(
+        app,
+        title="Grepp API",
+        version="1.0",
+        description="API for managing climbers, problems, and competitions",
+        authorizations=authorizations,
+        security="Bearer Auth",
+        doc="/docs",
+    )
 
-    # Add climber with admin role
-    # default_climber = Climber(name='v', selected_grade='Gul', roles='Admin')
-    # default_climber.set_password('v')
-    # db.session.add(default_climber)
+    api.add_namespace(climbers_ns)
+    api.add_namespace(competitions_ns)
+    api.add_namespace(problems_ns)
+    api.add_namespace(problem_attempts_ns)
+    api.add_namespace(grades_ns)
 
-    db.session.commit()
+    return app
 
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5001))
-    app.run(debug=True, host='0.0.0.0', port=port)
+if __name__ == "__main__":
+    app = create_app()
+    app.run(debug=True)
