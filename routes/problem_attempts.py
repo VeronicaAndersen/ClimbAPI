@@ -6,15 +6,17 @@ from models.problem_attempts import ProblemAttempt
 from models.climbers import Climber
 from models.participation import Participation
 from pydantic import BaseModel
+from typing import Optional
 
 attempts_router = APIRouter(prefix="/attempts", tags=["Problem Attempts"])
 
 class AttemptData(BaseModel):
     climber_id: str
     problem_id: int
-    attempts: int = 0
-    top: int = 0
-    bonus: int = 0
+    attempts: Optional[int] = None
+    top: Optional[int] = None
+    bonus: Optional[int] = None
+
 
 @attempts_router.post("/")
 def save_attempt(data: AttemptData, db: Session = Depends(get_db)):
@@ -38,20 +40,23 @@ def save_attempt(data: AttemptData, db: Session = Depends(get_db)):
         .first()
     )
 
-    if attempt:
-        attempt.attempts = data.attempts
-        attempt.top = data.top
-        attempt.bonus = data.bonus
-    else:
+    if not attempt:
         attempt = ProblemAttempt(
             climber_id=data.climber_id,
             problem_id=data.problem_id,
             competition_id=competition_id,
-            attempts=data.attempts,
-            top=data.top,
-            bonus=data.bonus,
+            attempts=data.attempts or 0,
+            top=data.top or 0,
+            bonus=data.bonus or 0,
         )
         db.add(attempt)
+    else:
+        if data.attempts is not None:
+            attempt.attempts = data.attempts
+        if data.top is not None:
+            attempt.top = data.top
+        if data.bonus is not None:
+            attempt.bonus = data.bonus
 
     db.commit()
     db.refresh(attempt)
@@ -65,7 +70,6 @@ def save_attempt(data: AttemptData, db: Session = Depends(get_db)):
         "top": attempt.top,
         "bonus": attempt.bonus,
     }
-
 @attempts_router.get("/climber/{climber_id}/competition/{competition_id}")
 def get_climber_attempts_for_competition(climber_id: str, competition_id: int, db: Session = Depends(get_db)):
     """
