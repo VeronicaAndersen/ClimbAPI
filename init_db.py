@@ -1,7 +1,7 @@
 from database import Base, engine
 from sqlalchemy import text
 
-# ✅ Import all models to register them with Base.metadata
+# Import all models to register them with Base.metadata
 from models import climbers, competitions, participation, problems, problem_attempts
 
 print("Dropping all tables...")
@@ -18,7 +18,7 @@ with engine.begin() as conn:  # `begin()` keeps same connection for all statemen
 
 print("Done drop.\nCreating all tables...")
 
-# ✅ Create tables normally
+# Create tables normally
 Base.metadata.create_all(bind=engine)
 
-print("✅ Done create.")
+print("Done create.")

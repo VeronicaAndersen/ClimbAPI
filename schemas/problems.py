@@ -8,5 +8,5 @@ class ProblemBase(BaseModel):
     visible: bool
     competition_id: int
 
-    # ✅ Allow ORM conversion
+    # Allow ORM conversion
     model_config = ConfigDict(from_attributes=True)

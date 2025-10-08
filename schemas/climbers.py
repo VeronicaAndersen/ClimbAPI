@@ -1,4 +1,3 @@
-# schemas/climbers.py
 from pydantic import BaseModel
 
 class ClimberRegister(BaseModel):
