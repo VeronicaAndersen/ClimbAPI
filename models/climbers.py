@@ -11,12 +11,10 @@ class Climber(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(100), nullable=False, unique=True)
-    selected_grade = Column(String(20))
     password_hash = Column(String(255))
 
     # relationships
     attempts = relationship("ProblemAttempt", back_populates="climber")
-    participations = relationship("Participation", back_populates="climber")
 
     # password helpers
     def set_password(self, password: str):

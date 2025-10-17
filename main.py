@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import Base, engine
-from routes.problems import problems_router
 from routes.problem_attempts import attempts_router
 from routes.competitions import competitions_router
 from routes.climbers import climbers_router
@@ -19,8 +18,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(problems_router)
-app.include_router(attempts_router)
-app.include_router(competitions_router)
 app.include_router(climbers_router)
+app.include_router(competitions_router)
+app.include_router(attempts_router)
 app.include_router(grades_router)

@@ -27,7 +27,7 @@ def register_climber(data: ClimberRegister, db: Session = Depends(get_db)):
     if existing:
         raise HTTPException(status_code=400, detail="Climber already exists")
 
-    climber = Climber(name=data.name, selected_grade=data.selected_grade)
+    climber = Climber(name=data.name)
     climber.set_password(data.password)
     db.add(climber)
     db.commit()
@@ -42,8 +42,20 @@ def login_climber(data: ClimberLogin, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     token = create_access_token({"sub": climber.id, "name": climber.name})
-    return {"access_token": token, "token_type": "bearer", "climber_id": climber.id}
+    return {"access_token": token, "token_type": "bearer", "climber_id": climber.id, "climber_name": climber.name}
 
+# update climber info
+@climbers_router.put("/{climber_id}", response_model=ClimberOut)
+def update_climber(climber_id: str, data: ClimberRegister, db: Session = Depends(get_db)):
+    climber = db.query(Climber).get(climber_id)
+    if not climber:
+        raise HTTPException(status_code=404, detail="Climber not found")
+    climber.name = data.name
+    if data.password:
+        climber.set_password(data.password)
+    db.commit()
+    db.refresh(climber)
+    return climber
 
 @climbers_router.get("/{climber_id}", response_model=ClimberOut)
 def get_climber(climber_id: str, db: Session = Depends(get_db)):

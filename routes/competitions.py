@@ -4,9 +4,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.competitions import Competition
 from models.climbers import Climber
-from models.problems import Problem
-from models.participation import Participation
-from schemas.problems import ProblemBase
+from models.problem_attempts import ProblemAttempt
 from constants.grades import GRADES
 
 competitions_router = APIRouter(prefix="/competitions", tags=["Competitions"])
@@ -23,7 +21,6 @@ def list_competitions(db: Session = Depends(get_db)):
             "id": comp.id,
             "name": comp.compname,
             "date": str(comp.compdate),
-            "participants": comp.comppart,
             "visible": comp.visible,
         }
         for comp in competitions
@@ -34,18 +31,17 @@ def list_competitions(db: Session = Depends(get_db)):
 def create_competition(
     compname: str,
     compdate: date,
-    comppart: int = 0,
     db: Session = Depends(get_db),
 ):
     """
     Create a new competition.
     """
     # Check for duplicates
-    existing = db.query(Competition).filter_by(compname=compname).first()
+    existing = db.query(Competition).filter_by(compname=compname, compdate=compdate).first()
     if existing:
-        raise HTTPException(status_code=400, detail="Competition with this name already exists")
+        raise HTTPException(status_code=400, detail="Competition already exists")
 
-    comp = Competition(compname=compname, compdate=compdate, comppart=comppart, visible=True)
+    comp = Competition(compname=compname, compdate=compdate, visible=True)
     db.add(comp)
     db.commit()
     db.refresh(comp)
@@ -56,82 +52,81 @@ def create_competition(
             "id": comp.id,
             "name": comp.compname,
             "date": str(comp.compdate),
-            "participants": comp.comppart,
             "visible": comp.visible,
         },
     }
     
-@competitions_router.post("/join")
+# climber joins a competition by id and choosing a grade
+@competitions_router.post("/{competition_id}/join/{climber_id}")
 def join_competition(
-    climber_id: str,
     competition_id: int,
-    grade: str,
+    climber_id: str,
+    selected_grade: str,
     db: Session = Depends(get_db),
 ):
-    climber = db.query(Climber).get(climber_id)
-    if not climber:
-        raise HTTPException(status_code=404, detail="Climber not found")
-
     competition = db.query(Competition).get(competition_id)
     if not competition:
         raise HTTPException(status_code=404, detail="Competition not found")
-
-    if grade not in GRADES:
-        raise HTTPException(status_code=400, detail=f"Invalid grade. Valid: {', '.join(GRADES)}")
-
-    participation = (
-        db.query(Participation)
+    
+    climber = db.query(Climber).get(climber_id)
+    if not climber:
+        raise HTTPException(status_code=404, detail="Climber not found")
+    
+    if selected_grade not in GRADES:
+        raise HTTPException(status_code=400, detail="Invalid grade selected")
+    
+    # Check if the climber has already joined
+    existing_attempts = (
+        db.query(ProblemAttempt)
         .filter_by(climber_id=climber_id, competition_id=competition_id)
-        .first()
-    )
-
-    if participation:
-        participation.grade = grade
-    else:
-        participation = Participation(
-            climber_id=climber_id, competition_id=competition_id, grade=grade
-        )
-        db.add(participation)
-        # ✅ Update participant count
-        competition.comppart = (competition.comppart or 0) + 1
-
-    db.flush()
-
-    existing = (
-        db.query(Problem)
-        .filter_by(competition_id=competition_id, grade=grade)
-        .order_by(Problem.number)
         .all()
     )
-
-    if not existing:
-        new_problems = [
-            Problem(
-                number=i,
-                name=f"{grade} #{i}",
-                grade=grade,
-                visible=True,
-                competition_id=competition_id,
-            )
-            for i in range(1, 9)
-        ]
-        db.add_all(new_problems)
-        existing = new_problems
-
+    if existing_attempts:
+        raise HTTPException(status_code=400, detail="Climber has already joined this competition")
+    
+    # Create initial problem attempts for the climber in this competition
+    problems = db.query(ProblemAttempt).filter_by(competition_id=competition_id).all()
+    for problem in problems:
+        attempt = ProblemAttempt(
+            name=problem.name,
+            climber_id=climber_id,
+            competition_id=competition_id,
+            attempts=0,
+            top=0,
+            bonus=0,
+        )
+        db.add(attempt)
+    
     db.commit()
-
+    
     return {
-        "message": f"{climber.name} joined {competition.compname} as grade {grade}",
-        "competition": {
-            "id": competition.id,
-            "name": competition.compname,
-            "date": str(competition.compdate),
-            "participants": competition.comppart,
-        },
-        "climber": {
-            "id": climber.id,
-            "name": climber.name,
-            "grade": grade,
-        },
-        "problems": [ProblemBase.from_orm(p) for p in existing],
+        "message": f"Climber {climber.name} joined competition {competition.compname} with grade {selected_grade}"
+    }
+
+# update competition info
+@competitions_router.put("/{competition_id}")
+def update_competition(
+    competition_id: int,
+    compname: str,
+    compdate: date,
+    visible: bool,
+    db: Session = Depends(get_db),
+):
+    competition = db.query(Competition).get(competition_id)
+    
+    if not competition:
+        raise HTTPException(status_code=404, detail="Competition not found")
+    
+    competition.compname = compname
+    competition.compdate = compdate
+    competition.visible = visible
+    
+    db.commit()
+    db.refresh(competition)
+    
+    return {
+        "id": competition.id,
+        "name": competition.compname,
+        "date": str(competition.compdate),
+        "visible": competition.visible,
     }

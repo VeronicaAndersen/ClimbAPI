@@ -1,15 +1,8 @@
 from pydantic import BaseModel
+from typing import Optional
 
 class ProblemAttemptCreate(BaseModel):
-    climber_id: str
-    competition_id: int
     problem_id: int
-    attempts: int
-    bonus_attempt: int
-    top_attempt: int
-
-class ProblemAttemptOut(ProblemAttemptCreate):
-    id: int
-
-    class Config:
-        orm_mode = True
+    attempts: Optional[int] = 0
+    bonus: Optional[int] = 0
+    top: Optional[int] = 0

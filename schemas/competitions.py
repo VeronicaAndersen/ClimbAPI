@@ -1,14 +1,13 @@
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import date
-from schemas.problems import ProblemBase
+from ClimbAPI.models.problem_attempts import ProblemAttempt
 
 # ---- Base model ----
 class CompetitionBase(BaseModel):
     id: int
     compname: str
     compdate: date
-    comppart: int
     visible: bool
 
     class Config:
@@ -19,7 +18,6 @@ class CompetitionBase(BaseModel):
 class CompetitionCreate(BaseModel):
     compname: str
     compdate: date
-    comppart: Optional[int] = 0
     visible: Optional[bool] = True
 
 
@@ -27,13 +25,12 @@ class CompetitionCreate(BaseModel):
 class CompetitionUpdate(BaseModel):
     compname: Optional[str] = None
     compdate: Optional[date] = None
-    comppart: Optional[int] = None
     visible: Optional[bool] = None
 
 
 # ---- Full details with problems ----
 class CompetitionWithProblems(CompetitionBase):
-    problems: List[ProblemBase] = []
+    problems: List[ProblemAttempt] = []
 
 
 # ---- Competition list response ----

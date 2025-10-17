@@ -2,7 +2,7 @@ from database import Base, engine
 from sqlalchemy import text
 
 # Import all models to register them with Base.metadata
-from models import climbers, competitions, participation, problems, problem_attempts
+from models import climbers, competitions, problem_attempts
 
 print("Dropping all tables...")
 
