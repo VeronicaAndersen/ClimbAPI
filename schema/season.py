@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 class SeasonCreate(BaseModel):
     name: str
-    year: str
+    year: int
 
 
 class SeasonUpdate(BaseModel):
