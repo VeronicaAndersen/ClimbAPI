@@ -9,7 +9,7 @@ from db.models import Season
 from schema.season import SeasonCreate, SeasonOut, SeasonUpdate
 from security.deps import AdminUser
 
-router = APIRouter(prefix="/season", tags=["competition"])
+router = APIRouter(prefix="/season", tags=["season"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
