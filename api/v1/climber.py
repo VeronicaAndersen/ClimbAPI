@@ -7,9 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.config import get_session
 from db.models import Climber
-from security.hashing import hash_password
-from security.deps import CurrentUser
 from schema.climber import ClimberOut, ClimberCreate
+from security.deps import CurrentUser
+from security.hashing import hash_password
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 
