@@ -1,7 +1,7 @@
 from datetime import datetime, date
 from enum import Enum as PyEnum
 from typing import List, Optional
-
+from sqlalchemy import Enum as PgEnum, String
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -33,6 +33,10 @@ class CompType(PyEnum):
     QUALIFIER = "QUALIFIER"
     FINAL = "FINAL"
 
+class UserScope(str, PyEnum):
+    climber = "climber"
+    admin = "admin"
+
 
 class Climber(Base):
     __tablename__ = "climber"
@@ -43,7 +47,11 @@ class Climber(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    user_scope: Mapped[UserScope] = mapped_column(
+        PgEnum(UserScope, name="user_scope_t", native_enum=True),
+        nullable=False,
+        default=UserScope.climber,
+    )
 
     registrations: Mapped[List["Registration"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     problem_scores: Mapped[List["ProblemScore"]] = relationship(back_populates="user", cascade="all, delete-orphan")

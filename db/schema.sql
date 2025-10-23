@@ -1,6 +1,6 @@
-\restrict oKN2tcbNsx5GIOcx4UhpsTxtvHCbgcq8m51drYsbkfEwwTrXPML0wbFbfEcdf4G
+\restrict wCyH0lSx46CnKYYfBvxedN17xrqYEYoljFmgSWRD8UKlM9saf27T1I1sJkxDTgS
 
--- Dumped from database version 15.13 (8f9063c)
+-- Dumped from database version 15.14 (Postgres.app)
 -- Dumped by pg_dump version 17.6 (Homebrew)
 
 SET statement_timeout = 0;
@@ -25,6 +25,16 @@ CREATE TYPE public.comp_type AS ENUM (
 );
 
 
+--
+-- Name: user_scope_t; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.user_scope_t AS ENUM (
+    'climber',
+    'admin'
+);
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -39,7 +49,7 @@ CREATE TABLE public.climber (
     password text NOT NULL,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
-    is_admin boolean DEFAULT false
+    user_scope public.user_scope_t DEFAULT 'climber'::public.user_scope_t NOT NULL
 );
 
 
@@ -400,7 +410,7 @@ ALTER TABLE ONLY public.registration
 -- PostgreSQL database dump complete
 --
 
-\unrestrict oKN2tcbNsx5GIOcx4UhpsTxtvHCbgcq8m51drYsbkfEwwTrXPML0wbFbfEcdf4G
+\unrestrict wCyH0lSx46CnKYYfBvxedN17xrqYEYoljFmgSWRD8UKlM9saf27T1I1sJkxDTgS
 
 
 --
@@ -408,4 +418,5 @@ ALTER TABLE ONLY public.registration
 --
 
 INSERT INTO public.schema_migrations (version) VALUES
-    ('20251020064831');
+    ('20251020064831'),
+    ('20251023174145');
