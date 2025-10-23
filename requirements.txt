@@ -1,28 +1,11 @@
-# --- Core web framework ---
-fastapi[standard]>=0.112.0,<0.113.0
-uvicorn[standard]==0.30.1
-
-# --- Database ---
-SQLAlchemy==2.0.34
-pymysql==1.1.1
-alembic==1.13.3
-
-# --- Auth (JWT) ---
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-bcrypt==4.0.1
-
-# --- Validation & serialization ---
-pydantic==2.9.2
-pydantic-settings==2.3.4
-
-# --- CORS & Middleware ---
-starlette==0.37.2
-
-# --- Utilities ---
-python-dotenv==1.0.1
-
-# --- Dev / lint (optional) ---
-black==24.10.0
-flake8==7.1.1
-
+fastapi
+uvicorn[standard]
+pydantic
+SQLAlchemy>=2.0
+asyncpg
+passlib[bcrypt]
+bcrypt
+passlib
+argon2-cffi
+PyJWT
+pydantic
