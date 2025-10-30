@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
 
 from db.config import get_session
 from db.models import Competition, Problem
@@ -54,14 +55,24 @@ async def get_competition(comp_id: int, session: SessionDep):
 @router.get("", response_model=List[CompetitionOut])
 async def list_competitions(
         session: SessionDep,
-        season_id: Optional[int] = Query(None),
-        comp_type: Optional[str] = Query(None),
+        comp: Optional[CompetitionUpdate] = None,
 ):
     stmt = select(Competition)
-    if season_id is not None:
-        stmt = stmt.where(Competition.season_id == season_id)
-    if comp_type is not None:
-        stmt = stmt.where(Competition.comp_type == comp_type)
+    if comp is not None:
+        data = comp.model_dump(exclude_unset=True, exclude_none=True)
+        filters = []
+        for k, v in data.items():
+            col: Optional[InstrumentedAttribute] = getattr(Competition, k, None)
+            if col is None:
+                continue
+            if isinstance(v, (list, tuple, set)):
+                if v:  # only add if non-empty
+                    filters.append(col.in_(v))
+            else:
+                filters.append(col == v)
+        if filters:
+            stmt = stmt.where(*filters)
+
     rows = (await session.execute(stmt.order_by(Competition.comp_date.asc()))).scalars().all()
     return rows
 
