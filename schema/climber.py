@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, constr
 
+from schema.auth import TokenPair
+
 
 class ClimberCreate(BaseModel):
     name: constr(min_length=1, max_length=200)
@@ -14,3 +16,7 @@ class ClimberOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class AuthOut(TokenPair):
+    climber: ClimberOut
