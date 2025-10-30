@@ -12,7 +12,7 @@ class SeasonCreate(BaseModel):
 class SeasonUpdate(BaseModel):
     # All fields optional; we validate after merge in the router
     name: Optional[str] = None
-    year: Optional[str] = None
+    year: Optional[int] = None
 
 
 class SeasonOut(BaseModel):

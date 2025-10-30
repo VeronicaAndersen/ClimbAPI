@@ -34,14 +34,14 @@ async def get_season(season_id: int, session: SessionDep, _: AdminUser):
 async def list_seasons(
         session: SessionDep,
         _: AdminUser,
-        name: str = Optional[None],
-        year: str = Optional[None],
+        s: Optional[SeasonUpdate] = None,
 ):
     stmt = select(Season)
-    if year is not None:
-        stmt = stmt.where(Season.year == year)
-    if name is not None:
-        stmt = stmt.where(Season.name == name)
+    if s is not None:
+        if s.year is not None:
+            stmt = stmt.filter(Season.year == s.year)
+        if s.name is not None:
+            stmt = stmt.filter(Season.name == s.name)
     rows = (await session.execute(stmt.order_by(Season.created_at.asc()))).scalars().all()
     return rows
 
