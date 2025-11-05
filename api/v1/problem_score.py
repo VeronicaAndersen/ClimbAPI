@@ -183,3 +183,67 @@ async def upsert_problem_scores_batch(
     # (optional) sort by problem_no for deterministic order
     results.sort(key=lambda x: x.problem_no)
     return results
+
+
+#get batch problem scores 
+@router.get(
+    "/{comp_id}/level/{level}/scores/batch",
+    response_model=list[ProblemScoreBulkResult],
+    status_code=status.HTTP_200_OK,
+)
+async def get_problem_scores_batch(
+        comp_id: int,
+        level: int,
+        session: SessionDep,
+        current: CurrentUser,
+):
+    # Check that user is registered
+    reg = await session.scalar(
+        select(Registration).where(
+            Registration.comp_id == comp_id,
+            Registration.user_id == current.id,
+        )
+    )
+    if not reg:
+        raise HTTPException(status_code=403, detail="Not registered for this competition")
+    if reg.level != level:
+        raise HTTPException(status_code=403, detail="Registered for a different level")
+
+    # Get problems for level
+    problems = (await session.execute(
+        select(Problem)
+        .where(
+            Problem.competition_id == comp_id,
+            Problem.level_no == level,
+        )
+    )).scalars().all()
+    problem_by_id: Dict[int, Problem] = {p.id: p for p in problems}
+
+    # Get scores for user
+    scores = (await session.execute(
+        select(ProblemScore)
+        .where(
+            ProblemScore.competition_id == comp_id,
+            ProblemScore.user_id == current.id,
+            ProblemScore.problem_id.in_(problem_by_id.keys()),
+        )
+    )).scalars().all()
+    results: list[ProblemScoreBulkResult] = []
+    for ps in scores:
+        prob = problem_by_id[ps.problem_id]
+        results.append(
+            ProblemScoreBulkResult(
+                problem_no=prob.problem_no,
+                score=ProblemScoreOutBulk(
+                    attempts_total=ps.attempts_total,
+                    got_bonus=ps.got_bonus,
+                    got_top=ps.got_top,
+                    attempts_to_bonus=ps.attempts_to_bonus,
+                    attempts_to_top=ps.attempts_to_top,
+                ),
+            )
+        )
+
+    # (optional) sort by problem_no for deterministic order
+    results.sort(key=lambda x: x.problem_no)
+    return results
