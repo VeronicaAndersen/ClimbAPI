@@ -217,6 +217,10 @@ async def get_problem_scores_batch(
             Problem.level_no == level,
         )
     )).scalars().all()
+
+    if not problems:
+        raise HTTPException(status_code=404, detail="No problems found for this level")
+
     problem_by_id: Dict[int, Problem] = {p.id: p for p in problems}
 
     # Get scores for user
@@ -228,22 +232,39 @@ async def get_problem_scores_batch(
             ProblemScore.problem_id.in_(problem_by_id.keys()),
         )
     )).scalars().all()
-    results: list[ProblemScoreBulkResult] = []
-    for ps in scores:
-        prob = problem_by_id[ps.problem_id]
-        results.append(
-            ProblemScoreBulkResult(
-                problem_no=prob.problem_no,
-                score=ProblemScoreOutBulk(
-                    attempts_total=ps.attempts_total,
-                    got_bonus=ps.got_bonus,
-                    got_top=ps.got_top,
-                    attempts_to_bonus=ps.attempts_to_bonus,
-                    attempts_to_top=ps.attempts_to_top,
-                ),
-            )
-        )
 
-    # (optional) sort by problem_no for deterministic order
+    results: list[ProblemScoreBulkResult] = []
+
+    if scores:
+        for ps in scores:
+            prob = problem_by_id[ps.problem_id]
+            results.append(
+                ProblemScoreBulkResult(
+                    problem_no=prob.problem_no,
+                    score=ProblemScoreOutBulk(
+                        attempts_total=ps.attempts_total,
+                        got_bonus=ps.got_bonus,
+                        got_top=ps.got_top,
+                        attempts_to_bonus=ps.attempts_to_bonus,
+                        attempts_to_top=ps.attempts_to_top,
+                    ),
+                )
+            )
+    else:
+        # Return 0-attempt score objects if no scores exist yet
+        for prob in problems:
+            results.append(
+                ProblemScoreBulkResult(
+                    problem_no=prob.problem_no,
+                    score=ProblemScoreOutBulk(
+                        attempts_total=0,
+                        got_bonus=False,
+                        got_top=False,
+                        attempts_to_bonus=0,
+                        attempts_to_top=0,
+                    ),
+                )
+            )
+
     results.sort(key=lambda x: x.problem_no)
     return results

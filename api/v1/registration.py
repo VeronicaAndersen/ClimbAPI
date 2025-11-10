@@ -8,6 +8,7 @@ from db.config import get_session
 from db.models import Competition, Registration
 from schema.registration import RegistrationCreate, RegistrationOut
 from security.deps import CurrentUser
+from db.models import Problem, ProblemScore
 
 router = APIRouter(tags=["registration"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -47,6 +48,31 @@ async def register_self(
     session.add(reg)
     await session.flush()
     await session.refresh(reg)
+
+    # create empty scores for problems in the same level
+    problems = (await session.execute(
+        select(Problem)
+        .where(
+            Problem.competition_id == comp_id,
+            Problem.level_no == body.level,
+        )
+    )).scalars().all()
+
+    for p in problems:
+        ps = ProblemScore(
+            competition_id=comp_id,
+            problem_id=p.id,
+            user_id=current.id,
+            attempts_total=0,
+            got_bonus=False,
+            got_top=False,
+            attempts_to_bonus=0,
+            attempts_to_top=0,
+        )
+        session.add(ps)
+
+    # final flush and return
+    await session.flush()
     return reg
 
 
