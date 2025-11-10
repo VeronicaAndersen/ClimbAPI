@@ -10,8 +10,8 @@ class ProblemScoreUpsert(BaseModel):
     attempts_total: conint(ge=0)
     got_bonus: bool
     got_top: bool
-    attempts_to_bonus: Optional[conint(ge=1)] = None
-    attempts_to_top: Optional[conint(ge=1)] = None
+    attempts_to_bonus: Optional[conint(ge=0)] = None
+    attempts_to_top: Optional[conint(ge=0)] = None
 
     @model_validator(mode="after")
     def _rules(self):

@@ -13,6 +13,7 @@ class ClimberCreate(BaseModel):
 class ClimberOut(BaseModel):
     id: int
     name: str
+    user_scope: str
     created_at: datetime
 
     model_config = {"from_attributes": True}
