@@ -6,7 +6,6 @@ from db.config import lifespan_context
 
 app = FastAPI(title="Grepp API (FastAPI Edition)", lifespan=lifespan_context)
 
-app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://grepp.vercel.app", "http://localhost:8080", "http://127.0.0.1:8080", "https://greppcomp-api.vercel.app"],
