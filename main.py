@@ -1,4 +1,4 @@
-from ClimbAPI.db.config import engine
+from db.config import engine
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
