@@ -1,4 +1,3 @@
-from db.config import engine
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -16,15 +15,6 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
-
-@app.on_event("shutdown")
-async def shutdown():
-    try:
-        await engine.dispose()
-    except RuntimeError as e:
-        if "Event loop is closed" not in str(e):
-            raise
-
 
 if __name__ == "__main__":
     import uvicorn
