@@ -1,3 +1,4 @@
+from ClimbAPI.db.config import engine
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -15,6 +16,10 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+
+@app.on_event("shutdown")
+async def shutdown():
+    await engine.dispose()
 
 if __name__ == "__main__":
     import uvicorn

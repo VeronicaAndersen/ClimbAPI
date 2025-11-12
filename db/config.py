@@ -36,15 +36,6 @@ SessionLocal = async_sessionmaker(
 )
 
 
-@asynccontextmanager
-async def lifespan_context(app):
-    try:
-        yield
-    finally:
-        # Ensure the pool is closed on shutdown
-        await engine.dispose()
-
-
 async def get_session() -> AsyncIterator[AsyncSession]:
     async with SessionLocal() as session:
         try:
