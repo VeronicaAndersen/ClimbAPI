@@ -19,7 +19,12 @@ app.include_router(api_router)
 
 @app.on_event("shutdown")
 async def shutdown():
-    await engine.dispose()
+    try:
+        await engine.dispose()
+    except RuntimeError as e:
+        if "Event loop is closed" not in str(e):
+            raise
+
 
 if __name__ == "__main__":
     import uvicorn
