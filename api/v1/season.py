@@ -15,6 +15,13 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 @router.post("", response_model=SeasonOut, status_code=status.HTTP_201_CREATED)
 async def create_season(payload: SeasonCreate, session: SessionDep, _: AdminUser):
+    existing = await session.scalar(
+        select(Season).where(
+            Season.name == payload.name
+        )
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="Season with this name already exists")
     season = Season(**payload.model_dump())
     session.add(season)
     await session.flush()

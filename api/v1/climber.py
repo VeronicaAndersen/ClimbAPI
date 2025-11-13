@@ -34,7 +34,6 @@ async def create_climber(payload: ClimberCreate, session: Session):
         await session.flush()
         await session.commit()
     except IntegrityError:
-        # in case of race, fallback to 409
         await session.rollback()
         raise HTTPException(status_code=409, detail="Name is already taken")
 

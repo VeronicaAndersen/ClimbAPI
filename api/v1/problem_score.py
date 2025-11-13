@@ -102,7 +102,7 @@ async def upsert_problem_scores_batch(
         session: SessionDep,
         current: CurrentUser,
 ):
-    # Check that user is registered
+    # Check that user is registered for that competition and level
     reg = await session.scalar(
         select(Registration).where(
             Registration.comp_id == comp_id,
@@ -114,8 +114,28 @@ async def upsert_problem_scores_batch(
     if reg.level != level:
         raise HTTPException(status_code=403, detail="Registered for a different level")
 
-    # Check that problems exist
+    # Check that items isn't empty & all problem_nos are distinct
+    if not body.items:
+        raise HTTPException(status_code=400, detail="No scores submitted.")
+
     wanted_nos = [item.problem_no for item in body.items]
+    if len(wanted_nos) != len(set(wanted_nos)):
+        raise HTTPException(status_code=400, detail="Duplicate problem numbers in the submitted batch are not allowed.")
+
+    # Validate the input values before altering DB
+    for item in body.items:
+        if any(val < 0 for val in [
+            item.attempts_total,
+            item.attempts_to_bonus,
+            item.attempts_to_top
+        ]):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Negative value in problem {item.problem_no} not allowed."
+            )
+        # Add more validation as needed
+
+    # Check that problems exist for the level and comp
     problems = (await session.execute(
         select(Problem)
         .where(
@@ -129,10 +149,10 @@ async def upsert_problem_scores_batch(
         missing = sorted(set(wanted_nos) - have)
         raise HTTPException(status_code=404, detail=f"Problems not found: {missing}")
 
-    # Load existing
     problem_by_no: Dict[int, Problem] = {p.problem_no: p for p in problems}
-
     problem_ids = [problem_by_no[n].id for n in wanted_nos]
+
+    # Load existing ProblemScores for this user & problem set
     existing_scores = (await session.execute(
         select(ProblemScore)
         .where(
@@ -143,12 +163,15 @@ async def upsert_problem_scores_batch(
     )).scalars().all()
     existing_by_pid: Dict[int, ProblemScore] = {ps.problem_id: ps for ps in existing_scores}
 
-    # Upsert
+    # Upsert (create or update) scores for each item
     results: list[ProblemScoreBulkResult] = []
+    # created_updated_info: list[Literal["created", "updated"]] = []  # Optional enhancement
+
     for item in body.items:
         prob = problem_by_no[item.problem_no]
         ps = existing_by_pid.get(prob.id)
         if ps is None:
+            # Create new
             ps = ProblemScore(
                 competition_id=comp_id,
                 problem_id=prob.id,
@@ -160,30 +183,34 @@ async def upsert_problem_scores_batch(
                 attempts_to_top=item.attempts_to_top,
             )
             session.add(ps)
+            # created_updated_info.append("created")
             existing_by_pid[prob.id] = ps
         else:
+            # Update values
             ps.attempts_total = item.attempts_total
             ps.got_bonus = item.got_bonus
             ps.got_top = item.got_top
             ps.attempts_to_bonus = item.attempts_to_bonus
             ps.attempts_to_top = item.attempts_to_top
+            # created_updated_info.append("updated")
 
+        # Defensive type conversion for SQLA 2.x+
         results.append(
             ProblemScoreBulkResult(
                 problem_no=item.problem_no,
                 score=ProblemScoreOutBulk(
-                    attempts_total=ps.attempts_total,
-                    got_bonus=ps.got_bonus,
-                    got_top=ps.got_top,
-                    attempts_to_bonus=ps.attempts_to_bonus,
-                    attempts_to_top=ps.attempts_to_top,
+                    attempts_total=int(ps.attempts_total),
+                    got_bonus=bool(ps.got_bonus),
+                    got_top=bool(ps.got_top),
+                    attempts_to_bonus=int(ps.attempts_to_bonus),
+                    attempts_to_top=int(ps.attempts_to_top),
                 ),
+                # operation=created_updated_info[-1]  # Optional audit enhancement
             )
         )
 
     await session.flush()
     await session.commit()
-    # (optional) sort by problem_no for deterministic order
     results.sort(key=lambda x: x.problem_no)
     return results
 
