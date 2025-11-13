@@ -32,6 +32,7 @@ async def create_climber(payload: ClimberCreate, session: Session):
 
     try:
         await session.flush()
+        await session.commit()
     except IntegrityError:
         # in case of race, fallback to 409
         await session.rollback()
@@ -54,3 +55,4 @@ async def get_climber(climber_id: int, session: Session):
         raise HTTPException(status_code=404, detail="Climber not found")
 
     return climber
+

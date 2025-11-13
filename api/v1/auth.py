@@ -25,12 +25,14 @@ async def signup(payload: ClimberCreate, session: Session):
 
     climber = Climber(
         name=payload.name,
+        user_scope="climber",
         password=hash_password(payload.password),
     )
     session.add(climber)
 
     try:
         await session.flush()
+        await session.commit()
     except IntegrityError:
         # in case of race, fallback to 409
         await session.rollback()
@@ -53,6 +55,7 @@ async def login(body: LoginRequest, session: Session):
     # Opportunistic rehash if parameters changed
     if needs_rehash(user.password):
         user.password = hash_password(body.password)
+        await session.commit()
 
     return TokenPair(
         access_token=create_access_token(user.id, extra={"name": user.name}),

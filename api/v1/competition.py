@@ -40,6 +40,7 @@ async def create_competition(
     session.add(comp)
     await session.flush()
     await seed_problems(session, comp.id, levels=7, per_level=8)
+    await session.commit()
     await session.refresh(comp)
     return comp
 
@@ -103,6 +104,7 @@ async def update_competition(
         setattr(comp, k, v)
 
     await session.flush()
+    await session.commit()
     await session.refresh(comp)
     return comp
 
@@ -117,4 +119,5 @@ async def delete_competition(
     if not comp:
         raise HTTPException(status_code=404, detail="Competition not found")
     await session.delete(comp)
+    await session.commit()
     return None

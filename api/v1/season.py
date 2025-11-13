@@ -18,6 +18,7 @@ async def create_season(payload: SeasonCreate, session: SessionDep, _: AdminUser
     season = Season(**payload.model_dump())
     session.add(season)
     await session.flush()
+    await session.commit()
     await session.refresh(season)
     return season
 
@@ -69,6 +70,7 @@ async def update_season(
         setattr(season, k, v)
 
     await session.flush()
+    await session.commit()
     await session.refresh(season)
     return season
 
@@ -83,4 +85,5 @@ async def delete_season(
     if not season:
         raise HTTPException(status_code=404, detail="Competition not found")
     await session.delete(season)
+    await session.commit()
     return None

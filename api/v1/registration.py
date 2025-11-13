@@ -73,6 +73,7 @@ async def register_self(
 
     # final flush and return
     await session.flush()
+    await session.commit()
     return reg
 
 

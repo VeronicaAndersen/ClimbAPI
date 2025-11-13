@@ -71,6 +71,7 @@ async def upsert_problem_score(
         )
         session.add(ps)
         await session.flush()
+        await session.commit()
         await session.refresh(ps)
 
         Response.status_code = status.HTTP_201_CREATED
@@ -84,6 +85,7 @@ async def upsert_problem_score(
         existing.attempts_to_top = body.attempts_to_top
 
         await session.flush()
+        await session.commit()
         await session.refresh(existing)
         return ProblemScoreOut(problem_no=problem_no, **existing.__dict__)
 
@@ -180,6 +182,7 @@ async def upsert_problem_scores_batch(
         )
 
     await session.flush()
+    await session.commit()
     # (optional) sort by problem_no for deterministic order
     results.sort(key=lambda x: x.problem_no)
     return results

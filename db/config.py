@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from typing import AsyncIterator
-import os, re
+import os
 
 DATABASE_URL = os.getenv("ASYNC_DATABASE_URL")
 
@@ -11,13 +11,18 @@ async_engine = create_async_engine(
     pool_pre_ping=True,
     pool_recycle=1800,
 )
-AsyncSessionLocal = async_sessionmaker(async_engine, expire_on_commit=False, class_=AsyncSession)
+
+AsyncSessionLocal = async_sessionmaker(
+    bind=async_engine,
+    expire_on_commit=False,
+    class_=AsyncSession
+)
 
 async def get_session() -> AsyncIterator[AsyncSession]:
     async with AsyncSessionLocal() as session:
         try:
             yield session
-        except:
+        except Exception:
             await session.rollback()
             raise
         finally:
