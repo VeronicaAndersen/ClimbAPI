@@ -19,5 +19,6 @@ class SeasonOut(BaseModel):
     id: int
     name: str
     created_at: datetime
+    year: int
 
     model_config = {"from_attributes": True}
