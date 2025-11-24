@@ -1,6 +1,6 @@
-\restrict wCyH0lSx46CnKYYfBvxedN17xrqYEYoljFmgSWRD8UKlM9saf27T1I1sJkxDTgS
+\restrict 85jA4NTGzISSk0ZzxDmZOVRurIJ0jd4si5FG1X1Jb7WweaxRepHp6VwmbtvPcfE
 
--- Dumped from database version 15.14 (Postgres.app)
+-- Dumped from database version 15.13 (8f9063c)
 -- Dumped by pg_dump version 17.6 (Homebrew)
 
 SET statement_timeout = 0;
@@ -158,6 +158,7 @@ CREATE TABLE public.problem_score (
     attempts_to_top integer,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
+    ifsc_score double precision DEFAULT 0 NOT NULL,
     CONSTRAINT problem_score_attempts_total_check CHECK ((attempts_total >= 0))
 );
 
@@ -410,7 +411,7 @@ ALTER TABLE ONLY public.registration
 -- PostgreSQL database dump complete
 --
 
-\unrestrict wCyH0lSx46CnKYYfBvxedN17xrqYEYoljFmgSWRD8UKlM9saf27T1I1sJkxDTgS
+\unrestrict 85jA4NTGzISSk0ZzxDmZOVRurIJ0jd4si5FG1X1Jb7WweaxRepHp6VwmbtvPcfE
 
 
 --
@@ -419,4 +420,5 @@ ALTER TABLE ONLY public.registration
 
 INSERT INTO public.schema_migrations (version) VALUES
     ('20251020064831'),
-    ('20251023174145');
+    ('20251023174145'),
+    ('20251124201937');

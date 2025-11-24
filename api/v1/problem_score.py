@@ -15,6 +15,15 @@ router = APIRouter(prefix="/competitions", tags=["scores"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
+def calculate_ifsc_score(body: ProblemScoreUpsert):
+    score = 0
+    if body.got_top:
+        score = 25 - ((body.attempts_to_top-1) * 0.1)
+    elif body.got_bonus:
+        score = 15 - ((body.attempts_to_bonus-1) * 0.1)
+    return score
+
+
 @router.put(
     "/{comp_id}/level/{level_no}/problems/{problem_no}/score",
     response_model=ProblemScoreOut,
@@ -68,6 +77,7 @@ async def upsert_problem_score(
             got_top=body.got_top,
             attempts_to_bonus=body.attempts_to_bonus,
             attempts_to_top=body.attempts_to_top,
+            ifsc_score=calculate_ifsc_score(body)
         )
         session.add(ps)
         await session.flush()
@@ -83,6 +93,7 @@ async def upsert_problem_score(
         existing.got_top = body.got_top
         existing.attempts_to_bonus = body.attempts_to_bonus
         existing.attempts_to_top = body.attempts_to_top
+        existing.ifsc_score = calculate_ifsc_score(body)
 
         await session.flush()
         await session.commit()
@@ -181,6 +192,7 @@ async def upsert_problem_scores_batch(
                 got_top=item.got_top,
                 attempts_to_bonus=item.attempts_to_bonus,
                 attempts_to_top=item.attempts_to_top,
+                ifsc_score=calculate_ifsc_score(item)
             )
             session.add(ps)
             # created_updated_info.append("created")
@@ -192,6 +204,7 @@ async def upsert_problem_scores_batch(
             ps.got_top = item.got_top
             ps.attempts_to_bonus = item.attempts_to_bonus
             ps.attempts_to_top = item.attempts_to_top
+            ps.ifsc_score = calculate_ifsc_score(item)
             # created_updated_info.append("updated")
 
         # Defensive type conversion for SQLA 2.x+
@@ -204,6 +217,7 @@ async def upsert_problem_scores_batch(
                     got_top=bool(ps.got_top),
                     attempts_to_bonus=int(ps.attempts_to_bonus),
                     attempts_to_top=int(ps.attempts_to_top),
+                    ifsc_score=float(ps.ifsc_score)
                 ),
                 # operation=created_updated_info[-1]  # Optional audit enhancement
             )
@@ -215,7 +229,7 @@ async def upsert_problem_scores_batch(
     return results
 
 
-#get batch problem scores 
+# get batch problem scores
 @router.get(
     "/{comp_id}/level/{level}/scores/batch",
     response_model=list[ProblemScoreBulkResult],
@@ -277,6 +291,7 @@ async def get_problem_scores_batch(
                         got_top=ps.got_top,
                         attempts_to_bonus=ps.attempts_to_bonus,
                         attempts_to_top=ps.attempts_to_top,
+                        ifsc_score=ps.ifsc_score
                     ),
                 )
             )
@@ -292,6 +307,7 @@ async def get_problem_scores_batch(
                         got_top=False,
                         attempts_to_bonus=0,
                         attempts_to_top=0,
+                        ifsc_score=0
                     ),
                 )
             )

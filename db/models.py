@@ -1,7 +1,7 @@
 from datetime import datetime, date
 from enum import Enum as PyEnum
 from typing import List, Optional
-from sqlalchemy import Enum as PgEnum, String
+from sqlalchemy import Enum as PgEnum, String, Float
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -136,6 +136,7 @@ class ProblemScore(Base):
     got_top: Mapped[bool] = mapped_column(Boolean, nullable=False)
     attempts_to_bonus: Mapped[Optional[int]] = mapped_column(Integer)
     attempts_to_top: Mapped[Optional[int]] = mapped_column(Integer)
+    ifsc_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

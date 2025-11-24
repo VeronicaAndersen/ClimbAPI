@@ -59,6 +59,8 @@ class ProblemScoreOutBulk(BaseModel):
     got_top: bool
     attempts_to_bonus: Optional[int] = None
     attempts_to_top: Optional[int] = None
+    ifsc_score: float
+
     model_config = {"from_attributes": True}
 
 
