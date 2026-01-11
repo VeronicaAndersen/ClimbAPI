@@ -4,11 +4,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.router import api_router
 
 
-app = FastAPI(title="Grepp API (FastAPI Edition)")
+app = FastAPI(title="Grepp API (FastAPI Edition)",    
+    version="1.0.0",
+    swagger_ui_parameters={
+        "persistAuthorization": True,
+    },
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://grepp.vercel.app", "http://localhost:8080"],
+    allow_origins=["https://grepp.vercel.app", "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     allow_headers=["*"],

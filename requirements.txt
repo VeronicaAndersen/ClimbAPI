@@ -4,8 +4,6 @@ pydantic
 SQLAlchemy>=2.0
 asyncpg
 passlib[bcrypt]
-bcrypt
-passlib
 argon2-cffi
 PyJWT
-pydantic
+python-multipart

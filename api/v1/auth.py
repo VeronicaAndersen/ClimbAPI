@@ -1,6 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,6 +56,31 @@ async def login(body: LoginRequest, session: Session):
     # Opportunistic rehash if parameters changed
     if needs_rehash(user.password):
         user.password = hash_password(body.password)
+        await session.commit()
+
+    return TokenPair(
+        access_token=create_access_token(user.id, extra={"name": user.name}),
+        refresh_token=create_refresh_token(user.id),
+    )
+
+
+@router.post("/token", response_model=TokenPair)
+async def token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()], session: Session):
+    """
+    OAuth2 compatible token endpoint for Swagger UI authorization.
+    Uses the same logic as /login but accepts OAuth2PasswordRequestForm.
+    """
+    user = await session.scalar(select(Climber).where(Climber.name == form_data.username))
+    if not user or not verify_password(form_data.password, user.password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Opportunistic rehash if parameters changed
+    if needs_rehash(user.password):
+        user.password = hash_password(form_data.password)
         await session.commit()
 
     return TokenPair(
