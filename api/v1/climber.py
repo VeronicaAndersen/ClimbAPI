@@ -119,6 +119,21 @@ async def update_climber(climber_id: int, payload: ClimberUpdate, admin: AdminUs
     return climber
 
 
+@router.delete("/{climber_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_climber(climber_id: int, admin: AdminUser, session: Session):
+    """
+    Delete a climber by ID. Admin only.
+    """
+    result = await session.execute(select(Climber).where(Climber.id == climber_id))
+    climber = result.scalar_one_or_none()
+    if climber is None:
+        raise HTTPException(status_code=404, detail="Climber not found")
+
+    await session.delete(climber)
+    await session.commit()
+    return None
+
+
 @router.get("/{climber_id}", response_model=ClimberOut)
 async def get_climber(climber_id: int, session: Session):
     """
