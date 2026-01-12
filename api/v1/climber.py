@@ -109,6 +109,13 @@ async def update_climber(climber_id: int, payload: ClimberUpdate, admin: AdminUs
     if payload.password is not None:
         climber.password = hash_password(payload.password)
 
+    # Update user scope if provided
+    if payload.user_scope is not None:
+        valid_scopes = ["climber", "setter", "analyst", "admin"]
+        if payload.user_scope not in valid_scopes:
+            raise HTTPException(status_code=400, detail="Invalid user scope")
+        climber.user_scope = payload.user_scope
+
     try:
         await session.commit()
         await session.refresh(climber)

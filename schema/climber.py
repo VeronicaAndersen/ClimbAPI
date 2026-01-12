@@ -14,6 +14,7 @@ class ClimberCreate(BaseModel):
 class ClimberUpdate(BaseModel):
     name: Optional[constr(min_length=1, max_length=200)] = None
     password: Optional[constr(min_length=6, max_length=1024)] = None
+    user_scope: Optional[str] = None
 
 
 class ClimberOut(BaseModel):
