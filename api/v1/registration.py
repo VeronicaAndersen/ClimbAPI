@@ -1,13 +1,13 @@
-from typing import Annotated
+from typing import Annotated, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.config import get_session
-from db.models import Competition, Registration
-from schema.registration import RegistrationCreate, RegistrationOut
-from security.deps import CurrentUser
+from db.models import Competition, Registration, Climber
+from schema.registration import RegistrationCreate, RegistrationOut, RegistrationWithClimberOut, RegistrationApprovalUpdate
+from security.deps import CurrentUser, AdminUser
 from db.models import Problem, ProblemScore
 
 router = APIRouter(tags=["registration"])
@@ -111,3 +111,79 @@ async def check_registration(
             Registration.user_id == current.id,
         )
     ) > 0
+
+
+# Admin: Get all registrations for a competition with climber names
+@router.get("/competition/{comp_id}/registrations",
+            response_model=List[RegistrationWithClimberOut],
+            status_code=status.HTTP_200_OK)
+async def get_all_registrations(
+        comp_id: int,
+        session: SessionDep,
+        admin: AdminUser,
+):
+    """
+    Get all registrations for a specific competition. Admin only.
+    Returns registrations with climber names.
+    """
+    # Verify competition exists
+    comp_exists = await session.scalar(
+        select(func.count()).select_from(Competition).where(Competition.id == comp_id)
+    )
+    if not comp_exists:
+        raise HTTPException(status_code=404, detail="Competition not found")
+
+    # Get registrations with climber info
+    result = await session.execute(
+        select(Registration, Climber.name)
+        .join(Climber, Registration.user_id == Climber.id)
+        .where(Registration.comp_id == comp_id)
+        .order_by(Registration.created_at.desc())
+    )
+
+    registrations = []
+    for reg, climber_name in result.all():
+        registrations.append(
+            RegistrationWithClimberOut(
+                comp_id=reg.comp_id,
+                user_id=reg.user_id,
+                level=reg.level,
+                approved=reg.approved,
+                created_at=reg.created_at,
+                climber_name=climber_name,
+            )
+        )
+
+    return registrations
+
+
+# Admin: Approve or reject a registration
+@router.patch("/competition/{comp_id}/registration/{user_id}",
+              response_model=RegistrationOut,
+              status_code=status.HTTP_200_OK)
+async def update_registration_approval(
+        comp_id: int,
+        user_id: int,
+        payload: RegistrationApprovalUpdate,
+        session: SessionDep,
+        admin: AdminUser,
+):
+    """
+    Approve or reject a registration. Admin only.
+    """
+    # Get the registration
+    reg = await session.scalar(
+        select(Registration).where(
+            Registration.comp_id == comp_id,
+            Registration.user_id == user_id,
+        )
+    )
+
+    if not reg:
+        raise HTTPException(status_code=404, detail="Registration not found")
+
+    reg.approved = payload.approved
+    await session.commit()
+    await session.refresh(reg)
+
+    return reg
