@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel, constr
 
@@ -8,6 +9,11 @@ from schema.auth import TokenPair
 class ClimberCreate(BaseModel):
     name: constr(min_length=1, max_length=200)
     password: constr(min_length=6, max_length=1024)
+
+
+class ClimberUpdate(BaseModel):
+    name: Optional[constr(min_length=1, max_length=200)] = None
+    password: Optional[constr(min_length=6, max_length=1024)] = None
 
 
 class ClimberOut(BaseModel):
