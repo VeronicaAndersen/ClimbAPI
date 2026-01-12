@@ -85,6 +85,40 @@ async def get_all_climbers(admin: AdminUser, session: Session):
     return climbers
 
 
+@router.patch("/{climber_id}", response_model=ClimberOut)
+async def update_climber(climber_id: int, payload: ClimberUpdate, admin: AdminUser, session: Session):
+    """
+    Update a climber by ID. Admin only.
+    """
+    # Get the climber to update
+    result = await session.execute(select(Climber).where(Climber.id == climber_id))
+    climber = result.scalar_one_or_none()
+    if climber is None:
+        raise HTTPException(status_code=404, detail="Climber not found")
+
+    # Check if name is being changed and if it's already taken
+    if payload.name is not None and payload.name != climber.name:
+        exists = await session.scalar(
+            select(Climber.id).where(Climber.name == payload.name)
+        )
+        if exists:
+            raise HTTPException(status_code=409, detail="Name is already taken")
+        climber.name = payload.name
+
+    # Hash and update password if provided
+    if payload.password is not None:
+        climber.password = hash_password(payload.password)
+
+    try:
+        await session.commit()
+        await session.refresh(climber)
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Name is already taken")
+
+    return climber
+
+
 @router.get("/{climber_id}", response_model=ClimberOut)
 async def get_climber(climber_id: int, session: Session):
     """
