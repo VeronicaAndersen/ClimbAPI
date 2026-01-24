@@ -189,7 +189,7 @@ async def update_registration_approval(
     return reg
 
 
-# Admin: Update registration level
+# Update registration level (user can update their own, admin can update anyone's)
 @router.patch("/competition/{comp_id}/registration/{user_id}/level",
               response_model=RegistrationOut,
               status_code=status.HTTP_200_OK)
@@ -198,13 +198,21 @@ async def update_registration_level(
         user_id: int,
         payload: RegistrationLevelUpdate,
         session: SessionDep,
-        admin: AdminUser,
+        current: CurrentUser,
 ):
     """
-    Update a user's level for a competition. Admin only.
+    Update a user's level for a competition.
+    Users can update their own level, admins can update any user's level.
     This will preserve existing scores and create new empty scores
     for problems in the new level that don't have scores yet.
     """
+    # Check if user is updating their own level or is an admin
+    if current.id != user_id and current.user_scope != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="You can only update your own level"
+        )
+
     # Get the registration
     reg = await session.scalar(
         select(Registration).where(
