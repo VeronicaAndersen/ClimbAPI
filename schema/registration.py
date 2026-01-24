@@ -30,3 +30,7 @@ class RegistrationWithClimberOut(BaseModel):
 
 class RegistrationApprovalUpdate(BaseModel):
     approved: bool
+
+
+class RegistrationLevelUpdate(BaseModel):
+    level: conint(ge=1, le=7)
