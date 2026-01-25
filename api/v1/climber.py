@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.config import get_session
-from db.models import Climber
+from db.models import Climber, UserScope
 from schema.climber import ClimberOut, ClimberCreate, ClimberUpdate
 from security.deps import CurrentUser, AdminUser
 from security.hashing import hash_password
@@ -16,22 +16,23 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 router = APIRouter(prefix='/climber', tags=['climber'])
 
 
-@router.post("", response_model=ClimberOut, status_code=status.HTTP_201_CREATED)
-async def create_climber(payload: ClimberCreate, session: Session):
-    exists = await session.scalar(
-        select(Climber.id).where(Climber.username == payload.username)
-    )
+async def check_username_available(session: AsyncSession, username: str, exclude_id: int = None) -> None:
+    """Check if username is available, raise 409 if taken."""
+    query = select(Climber.id).where(Climber.username == username)
+    if exclude_id:
+        query = query.where(Climber.id != exclude_id)
+
+    exists = await session.scalar(query)
     if exists:
         raise HTTPException(status_code=409, detail="Username is already taken")
 
-    climber = Climber(
-        username=payload.username,
-        password=hash_password(payload.password),
-        email=payload.email,
-        firstname=payload.firstname,
-        lastname=payload.lastname,
-        club=payload.club,
-    )
+
+@router.post("", response_model=ClimberOut, status_code=status.HTTP_201_CREATED)
+async def create_climber(payload: ClimberCreate, session: Session):
+    await check_username_available(session, payload.username)
+
+    climber_data = payload.model_dump(exclude={'password'})
+    climber = Climber(**climber_data, password=hash_password(payload.password))
     session.add(climber)
 
     try:
@@ -56,28 +57,19 @@ async def update_me(payload: ClimberUpdate, current: CurrentUser, session: Sessi
     Update the current user's profile.
     Users can update their own username and password.
     """
-    # Check if username is being changed and if it's already taken
-    if payload.username is not None and payload.username != current.username:
-        exists = await session.scalar(
-            select(Climber.id).where(Climber.username == payload.username)
-        )
-        if exists:
-            raise HTTPException(status_code=409, detail="Username is already taken")
-        current.username = payload.username
+    updates = payload.model_dump(exclude_unset=True)
 
-    # Hash and update password if provided
-    if payload.password is not None:
-        current.password = hash_password(payload.password)
+    # Check username uniqueness if being changed
+    if 'username' in updates and updates['username'] != current.username:
+        await check_username_available(session, updates['username'], exclude_id=current.id)
 
-    # Update other fields if provided
-    if payload.email is not None:
-        current.email = payload.email
-    if payload.firstname is not None:
-        current.firstname = payload.firstname
-    if payload.lastname is not None:
-        current.lastname = payload.lastname
-    if payload.club is not None:
-        current.club = payload.club
+    # Hash password if provided
+    if 'password' in updates:
+        updates['password'] = hash_password(updates['password'])
+
+    # Apply updates
+    for field, value in updates.items():
+        setattr(current, field, value)
 
     try:
         await session.commit()
@@ -104,41 +96,29 @@ async def update_climber(climber_id: int, payload: ClimberUpdate, admin: AdminUs
     """
     Update a climber by ID. Admin only.
     """
-    # Get the climber to update
-    result = await session.execute(select(Climber).where(Climber.id == climber_id))
-    climber = result.scalar_one_or_none()
-    if climber is None:
+    climber = await session.scalar(select(Climber).where(Climber.id == climber_id))
+    if not climber:
         raise HTTPException(status_code=404, detail="Climber not found")
 
-    # Check if username is being changed and if it's already taken
-    if payload.username is not None and payload.username != climber.username:
-        exists = await session.scalar(
-            select(Climber.id).where(Climber.username == payload.username)
-        )
-        if exists:
-            raise HTTPException(status_code=409, detail="Username is already taken")
-        climber.username = payload.username
+    updates = payload.model_dump(exclude_unset=True)
 
-    # Hash and update password if provided
-    if payload.password is not None:
-        climber.password = hash_password(payload.password)
+    # Check username uniqueness if being changed
+    if 'username' in updates and updates['username'] != climber.username:
+        await check_username_available(session, updates['username'], exclude_id=climber.id)
 
-    # Update other fields if provided
-    if payload.email is not None:
-        climber.email = payload.email
-    if payload.firstname is not None:
-        climber.firstname = payload.firstname
-    if payload.lastname is not None:
-        climber.lastname = payload.lastname
-    if payload.club is not None:
-        climber.club = payload.club
+    # Hash password if provided
+    if 'password' in updates:
+        updates['password'] = hash_password(updates['password'])
 
-    # Update user scope if provided
-    if payload.user_scope is not None:
-        valid_scopes = ["climber", "setter", "analyst", "admin"]
-        if payload.user_scope not in valid_scopes:
+    # Validate user scope if provided
+    if 'user_scope' in updates:
+        valid_scopes = {scope.value for scope in UserScope}
+        if updates['user_scope'] not in valid_scopes:
             raise HTTPException(status_code=400, detail="Invalid user scope")
-        climber.user_scope = payload.user_scope
+
+    # Apply updates
+    for field, value in updates.items():
+        setattr(climber, field, value)
 
     try:
         await session.commit()

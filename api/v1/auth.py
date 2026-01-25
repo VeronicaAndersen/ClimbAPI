@@ -18,20 +18,31 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+async def authenticate_user(session: AsyncSession, username: str, password: str) -> Climber:
+    """Authenticate user and return Climber object, raise 401 if invalid."""
+    user = await session.scalar(select(Climber).where(Climber.username == username))
+    if not user or not verify_password(password, user.password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    # Opportunistic rehash if password parameters changed
+    if needs_rehash(user.password):
+        user.password = hash_password(password)
+        await session.commit()
+
+    return user
+
+
 @router.post("/signup", response_model=AuthOut, status_code=status.HTTP_201_CREATED)
 async def signup(payload: ClimberCreate, session: Session):
     exists = await session.scalar(select(Climber.id).where(Climber.username == payload.username))
     if exists:
         raise HTTPException(status_code=409, detail="Username is already taken")
 
+    climber_data = payload.model_dump(exclude={'password'})
     climber = Climber(
-        username=payload.username,
+        **climber_data,
         user_scope="climber",
         password=hash_password(payload.password),
-        email=payload.email,
-        firstname=payload.firstname,
-        lastname=payload.lastname,
-        club=payload.club,
     )
     session.add(climber)
 
@@ -39,7 +50,6 @@ async def signup(payload: ClimberCreate, session: Session):
         await session.flush()
         await session.commit()
     except IntegrityError:
-        # in case of race, fallback to 409
         await session.rollback()
         raise HTTPException(status_code=409, detail="Username is already taken")
 
@@ -53,15 +63,7 @@ async def signup(payload: ClimberCreate, session: Session):
 
 @router.post("/login", response_model=TokenPair)
 async def login(body: LoginRequest, session: Session):
-    user = await session.scalar(select(Climber).where(Climber.username == body.username))
-    if not user or not verify_password(body.password, user.password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-
-    # Opportunistic rehash if parameters changed
-    if needs_rehash(user.password):
-        user.password = hash_password(body.password)
-        await session.commit()
-
+    user = await authenticate_user(session, body.username, body.password)
     return TokenPair(
         access_token=create_access_token(user.id, extra={"username": user.username}),
         refresh_token=create_refresh_token(user.id),
@@ -74,19 +76,7 @@ async def token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()], sess
     OAuth2 compatible token endpoint for Swagger UI authorization.
     Uses the same logic as /login but accepts OAuth2PasswordRequestForm.
     """
-    user = await session.scalar(select(Climber).where(Climber.username == form_data.username))
-    if not user or not verify_password(form_data.password, user.password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    # Opportunistic rehash if parameters changed
-    if needs_rehash(user.password):
-        user.password = hash_password(form_data.password)
-        await session.commit()
-
+    user = await authenticate_user(session, form_data.username, form_data.password)
     return TokenPair(
         access_token=create_access_token(user.id, extra={"username": user.username}),
         refresh_token=create_refresh_token(user.id),
