@@ -42,9 +42,9 @@ class Climber(Base):
     __tablename__ = "climber"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    username: Mapped[str] = mapped_column(Text, nullable=False)
+    username: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     password: Mapped[str] = mapped_column(Text, nullable=False)  # store a hash
-    email: Mapped[Optional[str]] = mapped_column(Text)
+    email: Mapped[Optional[str]] = mapped_column(Text, unique=True)
     firstname: Mapped[Optional[str]] = mapped_column(Text)
     lastname: Mapped[Optional[str]] = mapped_column(Text)
     club: Mapped[Optional[str]] = mapped_column(Text)

@@ -34,9 +34,16 @@ async def authenticate_user(session: AsyncSession, username: str, password: str)
 
 @router.post("/signup", response_model=AuthOut, status_code=status.HTTP_201_CREATED)
 async def signup(payload: ClimberCreate, session: Session):
+    # Check username uniqueness
     exists = await session.scalar(select(Climber.id).where(Climber.username == payload.username))
     if exists:
         raise HTTPException(status_code=409, detail="Username is already taken")
+
+    # Check email uniqueness if provided
+    if payload.email:
+        email_exists = await session.scalar(select(Climber.id).where(Climber.email == payload.email))
+        if email_exists:
+            raise HTTPException(status_code=409, detail="Email is already taken")
 
     climber_data = payload.model_dump(exclude={'password'})
     climber = Climber(
