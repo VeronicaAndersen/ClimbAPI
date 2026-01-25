@@ -19,14 +19,18 @@ router = APIRouter(prefix='/climber', tags=['climber'])
 @router.post("", response_model=ClimberOut, status_code=status.HTTP_201_CREATED)
 async def create_climber(payload: ClimberCreate, session: Session):
     exists = await session.scalar(
-        select(Climber.id).where(Climber.name == payload.name)
+        select(Climber.id).where(Climber.username == payload.username)
     )
     if exists:
-        raise HTTPException(status_code=409, detail="Name is already taken")
+        raise HTTPException(status_code=409, detail="Username is already taken")
 
     climber = Climber(
-        name=payload.name,
+        username=payload.username,
         password=hash_password(payload.password),
+        email=payload.email,
+        firstname=payload.firstname,
+        lastname=payload.lastname,
+        club=payload.club,
     )
     session.add(climber)
 
@@ -35,7 +39,7 @@ async def create_climber(payload: ClimberCreate, session: Session):
         await session.commit()
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(status_code=409, detail="Name is already taken")
+        raise HTTPException(status_code=409, detail="Username is already taken")
 
     await session.refresh(climber)
     return climber
@@ -50,27 +54,37 @@ async def get_me(current: CurrentUser):
 async def update_me(payload: ClimberUpdate, current: CurrentUser, session: Session):
     """
     Update the current user's profile.
-    Users can update their own name and password.
+    Users can update their own username and password.
     """
-    # Check if name is being changed and if it's already taken
-    if payload.name is not None and payload.name != current.name:
+    # Check if username is being changed and if it's already taken
+    if payload.username is not None and payload.username != current.username:
         exists = await session.scalar(
-            select(Climber.id).where(Climber.name == payload.name)
+            select(Climber.id).where(Climber.username == payload.username)
         )
         if exists:
-            raise HTTPException(status_code=409, detail="Name is already taken")
-        current.name = payload.name
+            raise HTTPException(status_code=409, detail="Username is already taken")
+        current.username = payload.username
 
     # Hash and update password if provided
     if payload.password is not None:
         current.password = hash_password(payload.password)
+
+    # Update other fields if provided
+    if payload.email is not None:
+        current.email = payload.email
+    if payload.firstname is not None:
+        current.firstname = payload.firstname
+    if payload.lastname is not None:
+        current.lastname = payload.lastname
+    if payload.club is not None:
+        current.club = payload.club
 
     try:
         await session.commit()
         await session.refresh(current)
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(status_code=409, detail="Name is already taken")
+        raise HTTPException(status_code=409, detail="Username is already taken")
 
     return current
 
@@ -96,18 +110,28 @@ async def update_climber(climber_id: int, payload: ClimberUpdate, admin: AdminUs
     if climber is None:
         raise HTTPException(status_code=404, detail="Climber not found")
 
-    # Check if name is being changed and if it's already taken
-    if payload.name is not None and payload.name != climber.name:
+    # Check if username is being changed and if it's already taken
+    if payload.username is not None and payload.username != climber.username:
         exists = await session.scalar(
-            select(Climber.id).where(Climber.name == payload.name)
+            select(Climber.id).where(Climber.username == payload.username)
         )
         if exists:
-            raise HTTPException(status_code=409, detail="Name is already taken")
-        climber.name = payload.name
+            raise HTTPException(status_code=409, detail="Username is already taken")
+        climber.username = payload.username
 
     # Hash and update password if provided
     if payload.password is not None:
         climber.password = hash_password(payload.password)
+
+    # Update other fields if provided
+    if payload.email is not None:
+        climber.email = payload.email
+    if payload.firstname is not None:
+        climber.firstname = payload.firstname
+    if payload.lastname is not None:
+        climber.lastname = payload.lastname
+    if payload.club is not None:
+        climber.club = payload.club
 
     # Update user scope if provided
     if payload.user_scope is not None:
@@ -121,7 +145,7 @@ async def update_climber(climber_id: int, payload: ClimberUpdate, admin: AdminUs
         await session.refresh(climber)
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(status_code=409, detail="Name is already taken")
+        raise HTTPException(status_code=409, detail="Username is already taken")
 
     return climber
 

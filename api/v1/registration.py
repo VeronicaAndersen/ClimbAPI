@@ -135,7 +135,7 @@ async def get_all_registrations(
 
     # Get registrations with climber info
     result = await session.execute(
-        select(Registration, Climber.name)
+        select(Registration, Climber.username)
         .join(Climber, Registration.user_id == Climber.id)
         .where(Registration.comp_id == comp_id)
         .order_by(Registration.created_at.desc())

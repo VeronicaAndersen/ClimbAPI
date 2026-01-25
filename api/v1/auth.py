@@ -20,14 +20,18 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/signup", response_model=AuthOut, status_code=status.HTTP_201_CREATED)
 async def signup(payload: ClimberCreate, session: Session):
-    exists = await session.scalar(select(Climber.id).where(Climber.name == payload.name))
+    exists = await session.scalar(select(Climber.id).where(Climber.username == payload.username))
     if exists:
-        raise HTTPException(status_code=409, detail="Name is already taken")
+        raise HTTPException(status_code=409, detail="Username is already taken")
 
     climber = Climber(
-        name=payload.name,
+        username=payload.username,
         user_scope="climber",
         password=hash_password(payload.password),
+        email=payload.email,
+        firstname=payload.firstname,
+        lastname=payload.lastname,
+        club=payload.club,
     )
     session.add(climber)
 
@@ -37,7 +41,7 @@ async def signup(payload: ClimberCreate, session: Session):
     except IntegrityError:
         # in case of race, fallback to 409
         await session.rollback()
-        raise HTTPException(status_code=409, detail="Name is already taken")
+        raise HTTPException(status_code=409, detail="Username is already taken")
 
     await session.refresh(climber)
     return AuthOut(
@@ -49,7 +53,7 @@ async def signup(payload: ClimberCreate, session: Session):
 
 @router.post("/login", response_model=TokenPair)
 async def login(body: LoginRequest, session: Session):
-    user = await session.scalar(select(Climber).where(Climber.name == body.username))
+    user = await session.scalar(select(Climber).where(Climber.username == body.username))
     if not user or not verify_password(body.password, user.password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
@@ -59,7 +63,7 @@ async def login(body: LoginRequest, session: Session):
         await session.commit()
 
     return TokenPair(
-        access_token=create_access_token(user.id, extra={"name": user.name}),
+        access_token=create_access_token(user.id, extra={"username": user.username}),
         refresh_token=create_refresh_token(user.id),
     )
 
@@ -70,7 +74,7 @@ async def token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()], sess
     OAuth2 compatible token endpoint for Swagger UI authorization.
     Uses the same logic as /login but accepts OAuth2PasswordRequestForm.
     """
-    user = await session.scalar(select(Climber).where(Climber.name == form_data.username))
+    user = await session.scalar(select(Climber).where(Climber.username == form_data.username))
     if not user or not verify_password(form_data.password, user.password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -84,7 +88,7 @@ async def token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()], sess
         await session.commit()
 
     return TokenPair(
-        access_token=create_access_token(user.id, extra={"name": user.name}),
+        access_token=create_access_token(user.id, extra={"username": user.username}),
         refresh_token=create_refresh_token(user.id),
     )
 
