@@ -1,6 +1,6 @@
-\restrict 85jA4NTGzISSk0ZzxDmZOVRurIJ0jd4si5FG1X1Jb7WweaxRepHp6VwmbtvPcfE
+\restrict R3IjUYXFI8wjwNVjNo7rAF6ThcmaNGPncV5DGTscTZIDr12OO1V1ITMFY0x93BA
 
--- Dumped from database version 15.13 (8f9063c)
+-- Dumped from database version 15.15 (Postgres.app)
 -- Dumped by pg_dump version 17.6 (Homebrew)
 
 SET statement_timeout = 0;
@@ -45,11 +45,15 @@ SET default_table_access_method = heap;
 
 CREATE TABLE public.climber (
     id bigint NOT NULL,
-    name text NOT NULL,
+    username text NOT NULL,
     password text NOT NULL,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
-    user_scope public.user_scope_t DEFAULT 'climber'::public.user_scope_t NOT NULL
+    user_scope public.user_scope_t DEFAULT 'climber'::public.user_scope_t NOT NULL,
+    email text,
+    firstname text,
+    lastname text,
+    club text
 );
 
 
@@ -173,6 +177,7 @@ CREATE TABLE public.registration (
     level integer NOT NULL,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
+    approved boolean DEFAULT false NOT NULL,
     CONSTRAINT level_range CHECK (((level >= 1) AND (level <= 10)))
 );
 
@@ -411,7 +416,7 @@ ALTER TABLE ONLY public.registration
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 85jA4NTGzISSk0ZzxDmZOVRurIJ0jd4si5FG1X1Jb7WweaxRepHp6VwmbtvPcfE
+\unrestrict R3IjUYXFI8wjwNVjNo7rAF6ThcmaNGPncV5DGTscTZIDr12OO1V1ITMFY0x93BA
 
 
 --
@@ -421,4 +426,7 @@ ALTER TABLE ONLY public.registration
 INSERT INTO public.schema_migrations (version) VALUES
     ('20251020064831'),
     ('20251023174145'),
-    ('20251124201937');
+    ('20251124201937'),
+    ('20260112'),
+    ('20260125143541'),
+    ('20260125144000');

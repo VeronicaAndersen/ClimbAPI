@@ -42,8 +42,12 @@ class Climber(Base):
     __tablename__ = "climber"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    name: Mapped[str] = mapped_column(Text, nullable=False)
+    username: Mapped[str] = mapped_column(Text, nullable=False)
     password: Mapped[str] = mapped_column(Text, nullable=False)  # store a hash
+    email: Mapped[Optional[str]] = mapped_column(Text)
+    firstname: Mapped[Optional[str]] = mapped_column(Text)
+    lastname: Mapped[Optional[str]] = mapped_column(Text)
+    club: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
