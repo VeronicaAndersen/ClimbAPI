@@ -50,13 +50,13 @@ async def send_password_reset_email(email: str, token: str, firstname: Optional[
     <html>
     <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-            <h2 style="color: #2563eb;">Återställ ditt lösenord</h2>
+            <h2 style="color: #505654;">Återställ ditt lösenord</h2>
             <p>{greeting},</p>
-            <p>Du har begärt att återställa ditt lösenord för ditt Grepp-konto.</p>
+            <p>Du har begärt att återställa ditt lösenord för ditt Greppmästerskaps-konto.</p>
             <p>Klicka på knappen nedan för att välja ett nytt lösenord:</p>
             <p style="text-align: center; margin: 30px 0;">
                 <a href="{reset_url}"
-                   style="background-color: #2563eb; color: white; padding: 12px 24px;
+                   style="background-color: #505654; color: white; padding: 12px 24px;
                           text-decoration: none; border-radius: 6px; display: inline-block;">
                     Återställ lösenord
                 </a>
