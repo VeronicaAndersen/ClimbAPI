@@ -48,3 +48,19 @@ class CompetitionOut(BaseModel):
     round_no: Optional[int]
 
     model_config = {"from_attributes": True}
+
+
+class LeaderboardEntry(BaseModel):
+    rank: int
+    name: str
+    total_score: float
+
+
+class LevelLeaderboard(BaseModel):
+    level: int
+    entries: list[LeaderboardEntry]
+
+
+class LeaderboardResponse(BaseModel):
+    competition_id: int
+    levels: list[LevelLeaderboard]
