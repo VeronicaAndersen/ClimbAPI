@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.config import get_session
 from db.models import Climber, UserScope
-from schema.climber import ClimberOut, ClimberCreate, ClimberUpdate
+from schema.climber import ClimberOut, ClimberCreate, ClimberUpdate, AdminClimberUpdate
 from security.deps import CurrentUser, AdminUser
 from security.hashing import hash_password
 
@@ -111,7 +111,7 @@ async def get_all_climbers(admin: AdminUser, session: Session):
 
 
 @router.patch("/{climber_id}", response_model=ClimberOut)
-async def update_climber(climber_id: int, payload: ClimberUpdate, admin: AdminUser, session: Session):
+async def update_climber(climber_id: int, payload: AdminClimberUpdate, admin: AdminUser, session: Session):
     """
     Update a climber by ID. Admin only.
     """

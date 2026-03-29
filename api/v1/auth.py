@@ -1,17 +1,27 @@
+import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import select
+from sqlalchemy import select, and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.config import get_session
-from db.models import Climber
-from schema.auth import TokenPair, LoginRequest, RefreshRequest
+from db.models import Climber, PasswordResetToken
+from schema.auth import (
+    TokenPair,
+    LoginRequest,
+    RefreshRequest,
+    PasswordResetRequest,
+    PasswordResetConfirm,
+    MessageResponse,
+)
 from schema.climber import ClimberCreate, AuthOut
 from security.hashing import verify_password, needs_rehash, hash_password
 from security.jwt_tools import create_access_token, create_refresh_token, decode_token
+from services.email import send_password_reset_email
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 
@@ -90,16 +100,85 @@ async def token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()], sess
     )
 
 
+@router.post("/password-reset/request", response_model=MessageResponse)
+async def request_password_reset(
+    body: PasswordResetRequest,
+    background_tasks: BackgroundTasks,
+    session: Session,
+):
+    email = body.email.strip().lower()
+    user = await session.scalar(select(Climber).where(Climber.email == email))
+
+    if user:
+        # Invalidate any existing unused tokens for this user
+        existing = await session.scalars(
+            select(PasswordResetToken).where(
+                and_(PasswordResetToken.user_id == user.id, PasswordResetToken.used == False)
+            )
+        )
+        for t in existing:
+            await session.delete(t)
+
+        token = secrets.token_urlsafe(32)
+        reset_token = PasswordResetToken(
+            user_id=user.id,
+            token=token,
+            expires_at=datetime.now(tz=timezone.utc) + timedelta(hours=1),
+        )
+        session.add(reset_token)
+        await session.commit()
+
+        background_tasks.add_task(
+            send_password_reset_email,
+            email=user.email,
+            token=token,
+            firstname=user.firstname,
+        )
+
+    # Always return the same message to avoid revealing whether the email exists
+    return MessageResponse(message="Om e-postadressen finns i systemet har ett mail skickats.")
+
+
+@router.post("/password-reset/confirm", response_model=MessageResponse)
+async def confirm_password_reset(body: PasswordResetConfirm, session: Session):
+    now = datetime.now(tz=timezone.utc)
+    reset_token = await session.scalar(
+        select(PasswordResetToken).where(
+            and_(
+                PasswordResetToken.token == body.token,
+                PasswordResetToken.used == False,
+                PasswordResetToken.expires_at > now,
+            )
+        )
+    )
+
+    if not reset_token:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    user = await session.get(Climber, reset_token.user_id)
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    user.password = hash_password(body.new_password)
+    reset_token.used = True
+    await session.commit()
+
+    return MessageResponse(message="Lösenordet har ändrats.")
+
+
 @router.post("/refresh", response_model=TokenPair)
-async def refresh(body: RefreshRequest):
+async def refresh(body: RefreshRequest, session: Session):
     try:
         payload = decode_token(body.refresh_token)
     except Exception:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Wrong token type")
-    sub = payload["sub"]
+    uid = int(payload["sub"])
+    user = await session.get(Climber, uid)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return TokenPair(
-        access_token=create_access_token(sub),
-        refresh_token=create_refresh_token(sub),  # rotation; add blacklist if needed
+        access_token=create_access_token(uid),
+        refresh_token=create_refresh_token(uid),  # rotation; add blacklist if needed
     )

@@ -1,9 +1,12 @@
 fastapi
 uvicorn[standard]
 pydantic
+pydantic-settings
 SQLAlchemy>=2.0
 asyncpg
 passlib[bcrypt]
 argon2-cffi
 PyJWT
 python-multipart
+fastapi-mail
+aiosmtplib

@@ -59,7 +59,20 @@ class Climber(Base):
 
     registrations: Mapped[List["Registration"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     problem_scores: Mapped[List["ProblemScore"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    password_reset_tokens: Mapped[List["PasswordResetToken"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_token"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("climber.id", ondelete="CASCADE"), nullable=False)
+    token: Mapped[str] = mapped_column(Text, nullable=False, unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped["Climber"] = relationship(back_populates="password_reset_tokens")
 
 
 class Season(Base):
