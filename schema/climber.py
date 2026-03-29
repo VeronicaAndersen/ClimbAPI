@@ -42,7 +42,6 @@ class ClimberUpdate(BaseModel):
     firstname: Optional[str] = None
     lastname: Optional[str] = None
     club: Optional[str] = None
-    user_scope: Optional[str] = None
 
     @field_validator('username')
     @classmethod
@@ -63,6 +62,10 @@ class ClimberUpdate(BaseModel):
         if v:
             return v.strip().lower()
         return v
+
+
+class AdminClimberUpdate(ClimberUpdate):
+    user_scope: Optional[str] = None
 
 
 class ClimberOut(BaseModel):

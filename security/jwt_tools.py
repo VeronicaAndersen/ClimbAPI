@@ -10,18 +10,22 @@ def _now() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
+_RESERVED_CLAIMS = frozenset({"iss", "sub", "iat", "nbf", "exp", "type"})
+
+
 def create_access_token(sub: str | int, extra: Optional[Dict[str, Any]] = None) -> str:
     now = _now()
-    payload = {
+    payload: Dict[str, Any] = {}
+    if extra:
+        payload.update({k: v for k, v in extra.items() if k not in _RESERVED_CLAIMS})
+    payload.update({
         "iss": settings.ISSUER,
         "sub": str(sub),
         "iat": int(now.timestamp()),
         "nbf": int(now.timestamp()),
         "exp": int((now + settings.access_delta).timestamp()),
         "type": "access",
-    }
-    if extra:
-        payload.update(extra)
+    })
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALG)
 
 
