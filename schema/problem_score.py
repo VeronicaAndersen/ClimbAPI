@@ -27,13 +27,11 @@ class ProblemScoreUpsert(BaseModel):
         if self.attempts_to_top is not None and self.attempts_to_top > self.attempts_total:
             raise ValueError("attempts_to_top cannot exceed attempts_total")
 
-        # If Top is achieved, bonus must have been achieved earlier or same try
-        if self.got_top:
-            if not self.got_bonus:
-                raise ValueError("IFSC: Top implies Zone (got_bonus must be true if got_top is true)")
+        # If both bonus and top are achieved, top attempt must not precede bonus attempt
+        if self.got_top and self.got_bonus:
             if self.attempts_to_bonus is not None and self.attempts_to_top is not None:
                 if self.attempts_to_top < self.attempts_to_bonus:
-                    raise ValueError("IFSC: attempts_to_top must be >= attempts_to_bonus")
+                    raise ValueError("attempts_to_top must be >= attempts_to_bonus")
 
         return self
 

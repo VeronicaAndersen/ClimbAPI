@@ -182,6 +182,91 @@ async def update_competition(
     return comp
 
 
+@router.get("/{comp_id}/leaderboard", response_model=LeaderboardResponse)
+async def get_leaderboard(comp_id: int, session: SessionDep, _: AdminUser):
+    comp = await session.get(Competition, comp_id)
+    if not comp:
+        raise HTTPException(status_code=404, detail="Competition not found")
+
+    # Pre-aggregate scores per (user, competition, level) via Problem to enforce level isolation.
+    # Without the Problem join the outer join would pull in scores from ALL levels for that user,
+    # causing climbers who changed levels to appear under multiple level groups.
+    scores_by_level = (
+        select(
+            ProblemScore.user_id,
+            func.sum(ProblemScore.ifsc_score).label("total_score"),
+            Problem.level_no,
+        )
+        .join(Problem, Problem.id == ProblemScore.problem_id)
+        .where(ProblemScore.competition_id == comp_id)
+        .group_by(ProblemScore.user_id, Problem.level_no)
+        .subquery()
+    )
+
+    score_sub = (
+        select(
+            Registration.level,
+            Registration.user_id,
+            func.coalesce(scores_by_level.c.total_score, 0.0).label("total_score"),
+            Climber.firstname,
+            Climber.lastname,
+            Climber.username,
+        )
+        .join(Climber, Climber.id == Registration.user_id)
+        .outerjoin(
+            scores_by_level,
+            (scores_by_level.c.user_id == Registration.user_id)
+            & (scores_by_level.c.level_no == Registration.level),
+        )
+        .where(Registration.comp_id == comp_id, Registration.approved.is_(True))
+        .subquery()
+    )
+
+    # Add rank window function
+    ranked_sub = (
+        select(
+            score_sub.c.level,
+            score_sub.c.total_score,
+            score_sub.c.firstname,
+            score_sub.c.lastname,
+            score_sub.c.username,
+            func.rank()
+            .over(
+                partition_by=score_sub.c.level,
+                order_by=score_sub.c.total_score.desc(),
+            )
+            .label("rank"),
+        )
+        .subquery()
+    )
+
+    stmt = (
+        select(ranked_sub)
+        .where(ranked_sub.c.rank <= 10)
+        .order_by(ranked_sub.c.level.asc(), ranked_sub.c.rank.asc())
+    )
+
+    rows = (await session.execute(stmt)).mappings().all()
+
+    levels: list[LevelLeaderboard] = []
+    for level, group in groupby(rows, key=lambda r: r["level"]):
+        entries = [
+            LeaderboardEntry(
+                rank=r["rank"],
+                name=(
+                    f"{r['firstname']} {r['lastname']}".strip()
+                    if r["firstname"] or r["lastname"]
+                    else r["username"]
+                ),
+                total_score=r["total_score"],
+            )
+            for r in group
+        ]
+        levels.append(LevelLeaderboard(level=level, entries=entries))
+
+    return LeaderboardResponse(competition_id=comp_id, levels=levels)
+
+
 @router.delete("/{comp_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_competition(
         comp_id: int,
