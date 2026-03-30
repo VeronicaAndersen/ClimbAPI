@@ -1,8 +1,8 @@
-from collections import defaultdict
+from itertools import groupby
 from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import and_, func, select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
@@ -51,71 +51,6 @@ async def create_competition(
     await session.commit()
     await session.refresh(comp)
     return comp
-
-
-@router.get("/{comp_id}/leaderboard", response_model=LeaderboardResponse)
-async def get_leaderboard(comp_id: int, session: SessionDep, _: AdminUser):
-    if not await session.get(Competition, comp_id):
-        raise HTTPException(status_code=404, detail="Competition not found")
-
-    subq = (
-        select(
-            Registration.level,
-            Climber.firstname,
-            Climber.lastname,
-            Climber.username,
-            func.sum(ProblemScore.ifsc_score).label("total_score"),
-            func.rank().over(
-                partition_by=Registration.level,
-                order_by=func.sum(ProblemScore.ifsc_score).desc(),
-            ).label("rank"),
-        )
-        .join(Climber, Climber.id == Registration.user_id)
-        .join(
-            ProblemScore,
-            and_(
-                ProblemScore.user_id == Registration.user_id,
-                ProblemScore.competition_id == Registration.comp_id,
-            ),
-        )
-        .where(
-            and_(
-                Registration.comp_id == comp_id,
-                Registration.approved == True,
-            )
-        )
-        .group_by(
-            Registration.level,
-            Climber.id,
-            Climber.firstname,
-            Climber.lastname,
-            Climber.username,
-        )
-        .subquery()
-    )
-
-    rows = (
-        await session.execute(
-            select(subq).where(subq.c.rank <= 10).order_by(subq.c.level, subq.c.rank)
-        )
-    ).all()
-
-    by_level: dict[int, list[LeaderboardEntry]] = defaultdict(list)
-    for row in rows:
-        firstname = row.firstname or ""
-        lastname = row.lastname or ""
-        full_name = (firstname + " " + lastname).strip() or row.username
-        by_level[row.level].append(
-            LeaderboardEntry(rank=row.rank, name=full_name, total_score=row.total_score)
-        )
-
-    return LeaderboardResponse(
-        competition_id=comp_id,
-        levels=[
-            LevelLeaderboard(level=lvl, entries=entries)
-            for lvl, entries in sorted(by_level.items())
-        ],
-    )
 
 
 @router.get("/{comp_id}", response_model=CompetitionOut)
