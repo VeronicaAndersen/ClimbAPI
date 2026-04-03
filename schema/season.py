@@ -22,3 +22,20 @@ class SeasonOut(BaseModel):
     year: int
 
     model_config = {"from_attributes": True}
+
+
+class SeasonStandingsEntry(BaseModel):
+    rank: int
+    name: str
+    total_score: float
+
+
+class LevelStandings(BaseModel):
+    level: int
+    entries: list[SeasonStandingsEntry]
+
+
+class SeasonStandingsResponse(BaseModel):
+    season_id: int
+    season_name: str
+    levels: list[LevelStandings]

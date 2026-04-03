@@ -17,12 +17,12 @@ class CompetitionCreate(BaseModel):
     comp_type: CompType
     comp_date: date
     season_id: int
-    round_no: Optional[conint(ge=1, le=3)] = None
+    round_no: Optional[conint(ge=1, le=4)] = None
 
     @model_validator(mode="after")
     def _check_round_vs_type(self):
         if self.comp_type == "QUALIFIER" and self.round_no is None:
-            raise ValueError("Qualifier must have round_no 1..3")
+            raise ValueError("Qualifier must have round_no 1..4")
         if self.comp_type == "FINAL" and self.round_no is not None:
             raise ValueError("Final must not have round_no")
         return self
@@ -35,7 +35,7 @@ class CompetitionUpdate(BaseModel):
     comp_type: Optional[CompType] = None
     comp_date: Optional[date] = None
     season_id: Optional[int] = None
-    round_no: Optional[conint(ge=1, le=3)] = None
+    round_no: Optional[conint(ge=1, le=4)] = None
 
 
 class CompetitionOut(BaseModel):
