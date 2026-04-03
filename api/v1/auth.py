@@ -49,12 +49,6 @@ async def signup(payload: ClimberCreate, session: Session):
     if exists:
         raise HTTPException(status_code=409, detail="Username is already taken")
 
-    # Check email uniqueness if provided
-    if payload.email:
-        email_exists = await session.scalar(select(Climber.id).where(Climber.email == payload.email))
-        if email_exists:
-            raise HTTPException(status_code=409, detail="Email is already taken")
-
     climber_data = payload.model_dump(exclude={'password'})
     climber = Climber(
         **climber_data,
@@ -106,10 +100,10 @@ async def request_password_reset(
     background_tasks: BackgroundTasks,
     session: Session,
 ):
-    email = body.email.strip().lower()
-    user = await session.scalar(select(Climber).where(Climber.email == email))
+    username = body.username.strip().lower()
+    user = await session.scalar(select(Climber).where(Climber.username == username))
 
-    if user:
+    if user and user.email:
         # Invalidate any existing unused tokens for this user
         existing = await session.scalars(
             select(PasswordResetToken).where(

@@ -27,19 +27,6 @@ async def check_username_available(session: AsyncSession, username: str, exclude
         raise HTTPException(status_code=409, detail="Username is already taken")
 
 
-async def check_email_available(session: AsyncSession, email: str, exclude_id: int = None) -> None:
-    """Check if email is available, raise 409 if taken. Only checks if email is not None."""
-    if email is None:
-        return
-
-    query = select(Climber.id).where(Climber.email == email)
-    if exclude_id:
-        query = query.where(Climber.id != exclude_id)
-
-    exists = await session.scalar(query)
-    if exists:
-        raise HTTPException(status_code=409, detail="Email is already taken")
-
 
 @router.post("", response_model=ClimberOut, status_code=status.HTTP_201_CREATED)
 async def create_climber(payload: ClimberCreate, session: Session):
@@ -77,10 +64,6 @@ async def update_me(payload: ClimberUpdate, current: CurrentUser, session: Sessi
     # Check username uniqueness if being changed
     if 'username' in updates and updates['username'] != current.username:
         await check_username_available(session, updates['username'], exclude_id=current.id)
-
-    # Check email uniqueness if being changed
-    if 'email' in updates and updates['email'] != current.email:
-        await check_email_available(session, updates['email'], exclude_id=current.id)
 
     # Hash password if provided
     if 'password' in updates:
@@ -124,10 +107,6 @@ async def update_climber(climber_id: int, payload: AdminClimberUpdate, admin: Ad
     # Check username uniqueness if being changed
     if 'username' in updates and updates['username'] != climber.username:
         await check_username_available(session, updates['username'], exclude_id=climber.id)
-
-    # Check email uniqueness if being changed
-    if 'email' in updates and updates['email'] != climber.email:
-        await check_email_available(session, updates['email'], exclude_id=climber.id)
 
     # Hash password if provided
     if 'password' in updates:
