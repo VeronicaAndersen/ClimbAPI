@@ -177,7 +177,7 @@ async def get_leaderboard(comp_id: int, session: SessionDep, _: AdminUser):
 
     stmt = (
         select(ranked_sub)
-        .where(ranked_sub.c.rank <= 10)
+        .where(ranked_sub.c.rank <= 20)
         .order_by(ranked_sub.c.level.asc(), ranked_sub.c.rank.asc())
     )
 
