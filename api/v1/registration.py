@@ -87,22 +87,19 @@ async def register_self(
 
 
 @router.get("/competition/{comp_id}/registration",
-            response_model=RegistrationOut,
+            response_model=RegistrationOut | None,
             status_code=status.HTTP_200_OK)
 async def get_my_registration(
         comp_id: int,
         session: SessionDep,
         current: CurrentUser,
 ):
-    reg = await session.scalar(
+    return await session.scalar(
         select(Registration).where(
             Registration.comp_id == comp_id,
             Registration.user_id == current.id,
         )
     )
-    if not reg:
-        raise HTTPException(status_code=404, detail="Not registered for this competition")
-    return reg
 
 
 @router.get("/competition/{comp_id}/registration/check",
