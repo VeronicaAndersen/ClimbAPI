@@ -3,6 +3,7 @@ from typing import Annotated, Dict
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from db.models import UserScope
 
 from db.config import get_session
 from db.models import Problem, Registration, ProblemScore
@@ -12,6 +13,8 @@ from schema.problem_score import (
     ProblemScoreBulkResult,
     ProblemScoreBulkRequest,
     ProblemScoreOutBulk,
+    ProblemStats,
+    LevelStatsResponse
 )
 from security.deps import CurrentUser
 
@@ -234,3 +237,82 @@ async def get_problem_scores_batch(
 
     results.sort(key=lambda x: x.problem_no)
     return results
+
+@router.get(
+    "/{comp_id}/level/{level}/stats",
+    response_model=LevelStatsResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_level_problem_stats(
+        comp_id: int,
+        level: int,
+        session: SessionDep,
+        current: CurrentUser,
+):
+    """Get aggregate statistics (top/bonus counts) for all problems in a level - admin only"""
+    
+    if current.user_scope != UserScope.admin:
+        raise HTTPException(status_code=403, detail="Only admins can view problem statistics")
+
+    # Get all problems for this level
+    problems = (await session.execute(
+        select(Problem)
+        .where(
+            Problem.competition_id == comp_id,
+            Problem.level_no == level,
+        )
+        .order_by(Problem.problem_no)
+    )).scalars().all()
+
+    if not problems:
+        raise HTTPException(status_code=404, detail="No problems found for this level")
+
+    problem_ids = [p.id for p in problems]
+
+    # Get all scores for these problems
+    scores = (await session.execute(
+        select(ProblemScore)
+        .where(
+            ProblemScore.competition_id == comp_id,
+            ProblemScore.problem_id.in_(problem_ids),
+        )
+    )).scalars().all()
+
+    # Count total competitors per problem (from registrations)
+    registrations = (await session.execute(
+        select(Registration)
+        .where(
+            Registration.comp_id == comp_id,
+            Registration.level == level,
+        )
+    )).scalars().all()
+    total_competitors = len(registrations)
+
+    # Aggregate statistics by problem
+    stats_by_problem: Dict[int, Dict[str, int]] = {
+        p.id: {"got_top": 0, "got_bonus": 0} for p in problems
+    }
+
+    for score in scores:
+        if score.got_top:
+            stats_by_problem[score.problem_id]["got_top"] += 1
+        if score.got_bonus:
+            stats_by_problem[score.problem_id]["got_bonus"] += 1
+
+    # Build response
+    problem_stats = []
+    for problem in problems:
+        stats = stats_by_problem[problem.id]
+        got_top_pct = (stats["got_top"] / total_competitors * 100) if total_competitors > 0 else 0
+        got_bonus_pct = (stats["got_bonus"] / total_competitors * 100) if total_competitors > 0 else 0
+
+        problem_stats.append(ProblemStats(
+            problem_no=problem.problem_no,
+            total_competitors=total_competitors,
+            got_top_count=stats["got_top"],
+            got_bonus_count=stats["got_bonus"],
+            got_top_percentage=round(got_top_pct, 2),
+            got_bonus_percentage=round(got_bonus_pct, 2),
+        ))
+
+    return LevelStatsResponse(level=level, problems=problem_stats)

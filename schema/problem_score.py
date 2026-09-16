@@ -69,3 +69,15 @@ class ProblemScoreOut(ProblemScoreOutBulk):
 class ProblemScoreBulkResult(BaseModel):
     problem_no: int
     score: ProblemScoreOutBulk
+    
+class ProblemStats(BaseModel):
+    problem_no: int
+    total_competitors: int
+    got_top_count: int
+    got_bonus_count: int
+    got_top_percentage: float
+    got_bonus_percentage: float
+
+class LevelStatsResponse(BaseModel):
+    level: int
+    problems: list[ProblemStats]
