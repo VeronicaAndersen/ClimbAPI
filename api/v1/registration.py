@@ -102,6 +102,43 @@ async def get_my_registration(
     )
 
 
+@router.delete("/competition/{comp_id}/registration",
+               status_code=status.HTTP_204_NO_CONTENT)
+async def withdraw_registration(
+        comp_id: int,
+        session: SessionDep,
+        current: CurrentUser,
+):
+    """
+    Withdraw the current user's own registration for a competition.
+    Only allowed while the registration is still pending approval.
+    """
+    reg = await session.scalar(
+        select(Registration).where(
+            Registration.comp_id == comp_id,
+            Registration.user_id == current.id,
+        )
+    )
+    if not reg:
+        raise HTTPException(status_code=404, detail="Registration not found")
+
+    if reg.approved:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot withdraw an already approved registration. Contact the reception.",
+        )
+
+    await session.execute(
+        ProblemScore.__table__.delete().where(
+            ProblemScore.competition_id == comp_id,
+            ProblemScore.user_id == current.id,
+        )
+    )
+    await session.delete(reg)
+    await session.commit()
+    return None
+
+
 @router.get("/competition/{comp_id}/registration/check",
             response_model=bool,
             status_code=status.HTTP_200_OK)
