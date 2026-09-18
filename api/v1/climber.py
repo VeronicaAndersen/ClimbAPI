@@ -6,8 +6,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.config import get_session
-from db.models import Climber, UserScope
+from db.models import Climber, Competition, Registration, UserScope
 from schema.climber import ClimberOut, ClimberCreate, ClimberUpdate, AdminClimberUpdate
+from schema.registration import RegistrationWithCompetitionOut
 from security.deps import CurrentUser, AdminUser
 from security.hashing import hash_password
 
@@ -158,4 +159,33 @@ async def get_climber(climber_id: int, session: Session):
         raise HTTPException(status_code=404, detail="Climber not found")
 
     return climber
+
+
+@router.get("/{climber_id}/registrations", response_model=List[RegistrationWithCompetitionOut])
+async def get_climber_registrations(climber_id: int, admin: AdminUser, session: Session):
+    """
+    Get all competition registrations for a specific climber. Admin only.
+    """
+    climber = await session.get(Climber, climber_id)
+    if climber is None:
+        raise HTTPException(status_code=404, detail="Climber not found")
+
+    rows = (await session.execute(
+        select(Registration, Competition.name, Competition.comp_date)
+        .join(Competition, Registration.comp_id == Competition.id)
+        .where(Registration.user_id == climber_id)
+        .order_by(Competition.comp_date.desc())
+    )).all()
+
+    return [
+        RegistrationWithCompetitionOut(
+            comp_id=reg.comp_id,
+            competition_name=competition_name,
+            comp_date=comp_date,
+            level=reg.level,
+            approved=reg.approved,
+            created_at=reg.created_at,
+        )
+        for reg, competition_name, comp_date in rows
+    ]
 

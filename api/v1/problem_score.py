@@ -16,7 +16,7 @@ from schema.problem_score import (
     ProblemStats,
     LevelStatsResponse
 )
-from security.deps import CurrentUser
+from security.deps import AdminUser, CurrentUser
 
 router = APIRouter(prefix="/competitions", tags=["scores"])
 
@@ -237,6 +237,67 @@ async def get_problem_scores_batch(
 
     results.sort(key=lambda x: x.problem_no)
     return results
+
+
+@router.get(
+    "/{comp_id}/level/{level}/users/{user_id}/scores",
+    response_model=list[ProblemScoreBulkResult],
+    status_code=status.HTTP_200_OK,
+)
+async def get_user_problem_scores_batch(
+        comp_id: int,
+        level: int,
+        user_id: int,
+        session: SessionDep,
+        admin: AdminUser,
+):
+    """Get a specific climber's problem scores for a competition level - admin only"""
+
+    await _require_registration(session, comp_id, user_id, level)
+
+    problems = (await session.execute(
+        select(Problem)
+        .where(
+            Problem.competition_id == comp_id,
+            Problem.level_no == level,
+        )
+    )).scalars().all()
+
+    if not problems:
+        raise HTTPException(status_code=404, detail="No problems found for this level")
+
+    problem_by_id: Dict[int, Problem] = {p.id: p for p in problems}
+
+    scores = (await session.execute(
+        select(ProblemScore)
+        .where(
+            ProblemScore.competition_id == comp_id,
+            ProblemScore.user_id == user_id,
+            ProblemScore.problem_id.in_(problem_by_id.keys()),
+        )
+    )).scalars().all()
+
+    if scores:
+        results = [_build_score_result(problem_by_id[ps.problem_id].problem_no, ps) for ps in scores]
+    else:
+        results = [
+            ProblemScoreBulkResult(
+                problem_no=prob.problem_no,
+                score=ProblemScoreOutBulk(
+                    attempts_total=0,
+                    got_bonus=False,
+                    got_top=False,
+                    attempts_to_bonus=0,
+                    attempts_to_top=0,
+                    ifsc_score=0.0,
+                ),
+            )
+            for prob in problems
+        ]
+
+    results.sort(key=lambda x: x.problem_no)
+    return results
+
 
 @router.get(
     "/{comp_id}/level/{level}/stats",

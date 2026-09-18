@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, conint
 
@@ -24,6 +24,17 @@ class RegistrationWithClimberOut(BaseModel):
     approved: bool
     created_at: datetime
     climber_name: str
+
+    model_config = {"from_attributes": True}
+
+
+class RegistrationWithCompetitionOut(BaseModel):
+    comp_id: int
+    competition_name: str
+    comp_date: date
+    level: int
+    approved: bool
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 
