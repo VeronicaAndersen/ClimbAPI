@@ -330,15 +330,6 @@ async def get_level_problem_stats(
 
     problem_ids = [p.id for p in problems]
 
-    # Get all scores for these problems
-    scores = (await session.execute(
-        select(ProblemScore)
-        .where(
-            ProblemScore.competition_id == comp_id,
-            ProblemScore.problem_id.in_(problem_ids),
-        )
-    )).scalars().all()
-
     # Count total competitors per problem (from registrations)
     registrations = (await session.execute(
         select(Registration)
@@ -348,6 +339,20 @@ async def get_level_problem_stats(
         )
     )).scalars().all()
     total_competitors = len(registrations)
+    registered_user_ids = {r.user_id for r in registrations}
+
+    # Get scores for these problems, limited to climbers still registered at this level.
+    # A climber who has since switched levels leaves behind ProblemScore rows tied to
+    # their old level's problems; those must not be counted here (see get_leaderboard
+    # for the equivalent level-isolation handling).
+    scores = (await session.execute(
+        select(ProblemScore)
+        .where(
+            ProblemScore.competition_id == comp_id,
+            ProblemScore.problem_id.in_(problem_ids),
+            ProblemScore.user_id.in_(registered_user_ids),
+        )
+    )).scalars().all() if registered_user_ids else []
 
     # Aggregate statistics by problem
     stats_by_problem: Dict[int, Dict[str, int]] = {
