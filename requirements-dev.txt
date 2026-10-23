@@ -3,4 +3,3 @@ pytest
 pytest-asyncio
 httpx
 aiosqlite
-ruff

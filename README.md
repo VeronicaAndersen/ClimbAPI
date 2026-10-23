@@ -9,16 +9,6 @@ pip install -r requirements.txt
 ```
 to install the required packages. 
 
-### Code checks
-Install the development dependencies:
-```
-pip install -r requirements-dev.txt
-```
-Then run the Python syntax check with:
-```
-ruff check .
-```
-
 ### Database and environment variables
 For testing and playing around, create a local database.
 Then create a .env file and add the following variables:
