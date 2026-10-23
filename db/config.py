@@ -2,7 +2,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from typing import AsyncIterator
 import os
 
-DATABASE_URL = os.getenv("ASYNC_DATABASE_URL")
+DATABASE_URL = os.getenv("ASYNC_DATABASE_URL") or "sqlite+aiosqlite:///./greppapi.db"
+if not os.getenv("ASYNC_DATABASE_URL"):
+    os.environ["ASYNC_DATABASE_URL"] = DATABASE_URL
 
 async_engine = create_async_engine(
     DATABASE_URL,

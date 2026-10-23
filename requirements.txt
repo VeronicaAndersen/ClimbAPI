@@ -3,6 +3,7 @@ uvicorn[standard]
 pydantic
 pydantic-settings
 SQLAlchemy>=2.0
+greenlet
 asyncpg
 passlib[bcrypt]
 argon2-cffi
