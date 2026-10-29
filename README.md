@@ -1,46 +1,47 @@
-# Climb API Backend service
-The service consist of a fastapi app and a postgresql database.
+# ClimbAPI
 
-## Get started
-Before you do anything, make sure to create a new venv and activate it. 
-Then run 
-```
-pip install -r requirements.txt
-```
-to install the required packages. 
+FastAPI backend for Greppmästerskapen. It uses PostgreSQL, SQLAlchemy, and dbmate migrations.
 
-### Database and environment variables
-For testing and playing around, create a local database.
-Then create a .env file and add the following variables:
-```
-LOCAL = "postgres@127.0.0.1:5432/<name-of-ypur-db>"
+For the complete local setup, including starting the frontend, see the [workspace startup guide](../ClimbApp/README.md#start-both-applications-locally).
 
-# DB Connection
-DATABASE_URL="postgresql://${LOCAL}?sslmode=disable" # <- dbmate will look for this one
-ASYNC_DATABASE_URL="postgresql+asyncpg://${LOCAL}" # <- api will look for this one
+## Run the backend
 
-PASSWORD_PEPPER="super-secret-password" # <- This is for salting the passwords
+Prerequisites: Python 3.10+, a running PostgreSQL server, and [dbmate](https://github.com/amacneil/dbmate) (on macOS: `brew install dbmate`). Create a local database, for example `grepp`, and configure a local `.env` file:
 
+```dotenv
+DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@127.0.0.1:5432/grepp?sslmode=disable"
+ASYNC_DATABASE_URL="postgresql+asyncpg://postgres:YOUR_PASSWORD@127.0.0.1:5432/grepp"
+PASSWORD_PEPPER="replace-with-a-long-random-secret"
+FRONTEND_URL="http://localhost:5173"
 ```
-The pepper-password can be anything when you're testing locally. For the production password, ask your local dealer. 
 
-The database migrations are run by dbmate. To get the status of your current db run:
-```
-dbmate status
-```
-and apply all non-applied changes with 
-```
+Use the username, password, and database name configured for your local PostgreSQL installation. Keep `.env` out of version control.
+
+Create and activate a virtual environment, install dependencies, load the environment, and run migrations:
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+set -a
+source .env
+set +a
 dbmate up
 ```
-if you have an empty database this will create all tables etc for you.
-More on dbmate commands here: https://github.com/amacneil/dbmate
 
-### Starting the api
-- Make sure your venv is active.
-- Make sure the database is up and running.
-- Then just run the main file:
-```
+Start the API in the same terminal so it inherits the environment variables:
+
+```sh
 python main.py
 ```
 
-The swagger docs should be visible at http://127.0.0.1:8000/docs
+The API listens at `http://127.0.0.1:8080`. OpenAPI documentation is available at [http://127.0.0.1:8080/docs](http://127.0.0.1:8080/docs). The app's SQLite fallback is intended for simple local/test use; the documented database migration workflow uses PostgreSQL.
+
+To run backend tests, install the development dependencies and execute pytest:
+
+```sh
+python -m pip install -r requirements-dev.txt
+pytest -q
+```
+
+Mail settings are optional for local startup. Without configured mail credentials, password-reset links are printed for development.
