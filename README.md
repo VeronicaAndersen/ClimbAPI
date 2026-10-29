@@ -6,7 +6,7 @@ For the complete local setup, including starting the frontend, see the [workspac
 
 ## Run the backend
 
-Prerequisites: Python 3.10+, a running PostgreSQL server, and [dbmate](https://github.com/amacneil/dbmate) (on macOS: `brew install dbmate`). Create a local database, for example `grepp`, and configure a local `.env` file:
+Prerequisites: Python 3.14, a running PostgreSQL server, and [dbmate](https://github.com/amacneil/dbmate) (on macOS: `brew install dbmate`). Create a local database, for example `grepp`, and configure a local `.env` file:
 
 ```dotenv
 DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@127.0.0.1:5432/grepp?sslmode=disable"
@@ -17,12 +17,14 @@ FRONTEND_URL="http://localhost:5173"
 
 Use the username, password, and database name configured for your local PostgreSQL installation. Keep `.env` out of version control.
 
-Create and activate a virtual environment, install dependencies, load the environment, and run migrations:
+Create and activate a Python 3.14 virtual environment, install dependencies, load the environment, and run migrations. If `.venv` already exists and was created with another Python version, remove it first (`rm -rf .venv`):
 
 ```sh
-python3 -m venv .venv
+if [ ! -d .venv ]; then
+	python -m venv .venv
+fi
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+pip install -r requirements.txt
 set -a
 source .env
 set +a
@@ -41,7 +43,7 @@ To run backend tests, install the development dependencies and execute pytest:
 
 ```sh
 python -m pip install -r requirements-dev.txt
-pytest -q
+python -m pytest -q
 ```
 
 Mail settings are optional for local startup. Without configured mail credentials, password-reset links are printed for development.
