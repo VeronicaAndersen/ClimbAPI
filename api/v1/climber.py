@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.config import get_session
 from db.models import Climber, Competition, Registration, UserScope
-from schema.climber import ClimberOut, ClimberCreate, ClimberUpdate, AdminClimberUpdate
+from schema.climber import ClimberOut, ClimberCreate, ClimberUpdate, AdminClimberUpdate, ClimberPublicOut
 from schema.registration import RegistrationWithCompetitionOut
 from security.deps import CurrentUser, AdminUser
 from security.hashing import hash_password
@@ -148,7 +148,7 @@ async def delete_climber(climber_id: int, admin: AdminUser, session: Session):
     return None
 
 
-@router.get("/{climber_id}", response_model=ClimberOut)
+@router.get("/{climber_id}", response_model=ClimberPublicOut)
 async def get_climber(climber_id: int, session: Session):
     """
     Get a specific climber by ID.
@@ -188,4 +188,3 @@ async def get_climber_registrations(climber_id: int, admin: AdminUser, session: 
         )
         for reg, competition_name, comp_date in rows
     ]
-

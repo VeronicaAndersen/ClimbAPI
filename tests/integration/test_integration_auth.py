@@ -181,13 +181,20 @@ class TestGetMe:
 # ---------------------------------------------------------------------------
 
 class TestGetClimberById:
-    async def test_get_climber_by_id(self, client):
-        signup_resp = await signup(client, username="fetched")
+    async def test_get_climber_by_id_is_public_and_excludes_private_fields(self, client):
+        signup_resp = await client.post(f"{BASE}/auth/signup", json={
+            "username": "fetched",
+            "password": "secret123",
+            "firstname": "Private",
+            "lastname": "Person",
+            "email": "private@example.com",
+            "club": "Private Club",
+        })
         climber_id = signup_resp.json()["climber"]["id"]
 
         resp = await client.get(f"{BASE}/climber/{climber_id}")
         assert resp.status_code == 200
-        assert resp.json()["username"] == "fetched"
+        assert resp.json() == {"id": climber_id, "username": "fetched"}
 
     async def test_get_nonexistent_climber_returns_404(self, client):
         resp = await client.get(f"{BASE}/climber/999999")
