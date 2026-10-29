@@ -81,12 +81,5 @@ class ClimberOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class ClimberPublicOut(BaseModel):
-    id: int
-    username: str
-
-    model_config = {"from_attributes": True}
-
-
 class AuthOut(TokenPair):
     climber: ClimberOut

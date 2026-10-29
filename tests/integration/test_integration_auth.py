@@ -6,8 +6,19 @@ an in-memory SQLite database — no mocking of business logic.
 """
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from db.models import Climber, UserScope
 
 BASE = "/api/v1"
+
+
+async def promote_to_admin(engine, climber_id: int):
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        climber = await session.get(Climber, climber_id)
+        climber.user_scope = UserScope.admin
+        await session.commit()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -177,11 +188,11 @@ class TestGetMe:
 
 
 # ---------------------------------------------------------------------------
-# GET /climber/{id}  (public — no auth required)
+# GET /climber/{id}  (admin-only)
 # ---------------------------------------------------------------------------
 
 class TestGetClimberById:
-    async def test_get_climber_by_id_is_public_and_excludes_private_fields(self, client):
+    async def test_get_climber_by_id_requires_admin(self, client, engine):
         signup_resp = await client.post(f"{BASE}/auth/signup", json={
             "username": "fetched",
             "password": "secret123",
@@ -191,13 +202,36 @@ class TestGetClimberById:
             "club": "Private Club",
         })
         climber_id = signup_resp.json()["climber"]["id"]
+        token = signup_resp.json()["access_token"]
 
         resp = await client.get(f"{BASE}/climber/{climber_id}")
-        assert resp.status_code == 200
-        assert resp.json() == {"id": climber_id, "username": "fetched"}
+        assert resp.status_code == 401
 
-    async def test_get_nonexistent_climber_returns_404(self, client):
-        resp = await client.get(f"{BASE}/climber/999999")
+        resp = await client.get(
+            f"{BASE}/climber/{climber_id}",
+            headers={"Authorization": f"******"},
+        )
+        assert resp.status_code == 403
+
+        await promote_to_admin(engine, climber_id)
+        resp = await client.get(
+            f"{BASE}/climber/{climber_id}",
+            headers={"Authorization": f"******"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["username"] == "fetched"
+        assert resp.json()["email"] == "private@example.com"
+
+    async def test_get_nonexistent_climber_returns_404(self, client, engine):
+        signup_resp = await signup(client)
+        climber_id = signup_resp.json()["climber"]["id"]
+        token = signup_resp.json()["access_token"]
+        await promote_to_admin(engine, climber_id)
+
+        resp = await client.get(
+            f"{BASE}/climber/999999",
+            headers={"Authorization": "Bearer " + token},
+        )
         assert resp.status_code == 404
 
 
