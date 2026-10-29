@@ -149,10 +149,13 @@ async def delete_climber(climber_id: int, admin: AdminUser, session: Session):
 
 
 @router.get("/{climber_id}", response_model=ClimberOut)
-async def get_climber(climber_id: int, admin: AdminUser, session: Session):
+async def get_climber(climber_id: int, current: CurrentUser, session: Session):
     """
-    Get a specific climber by ID.
+    Get your own profile or, as an admin, another climber's profile.
     """
+    if climber_id != current.id and "admin" not in current.effective_scopes:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
     result = await session.execute(select(Climber).where(Climber.id == climber_id))
     climber = result.scalar_one_or_none()
     if climber is None:

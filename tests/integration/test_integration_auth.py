@@ -188,12 +188,12 @@ class TestGetMe:
 
 
 # ---------------------------------------------------------------------------
-# GET /climber/{id}  (admin-only)
+# GET /climber/{id}  (own profile or admin-only)
 # ---------------------------------------------------------------------------
 
 class TestGetClimberById:
-    async def test_get_climber_by_id_requires_admin(self, client, engine):
-        signup_resp = await client.post(f"{BASE}/auth/signup", json={
+    async def test_get_climber_by_id_allows_owner_and_admin(self, client, engine):
+        owner_resp = await client.post(f"{BASE}/auth/signup", json={
             "username": "fetched",
             "password": "secret123",
             "firstname": "Private",
@@ -201,26 +201,35 @@ class TestGetClimberById:
             "email": "private@example.com",
             "club": "Private Club",
         })
-        climber_id = signup_resp.json()["climber"]["id"]
-        token = signup_resp.json()["access_token"]
+        owner_id = owner_resp.json()["climber"]["id"]
+        owner_token = owner_resp.json()["access_token"]
 
-        resp = await client.get(f"{BASE}/climber/{climber_id}")
+        other_resp = await signup(client, username="other")
+        other_id = other_resp.json()["climber"]["id"]
+
+        resp = await client.get(f"{BASE}/climber/{owner_id}")
         assert resp.status_code == 401
 
         resp = await client.get(
-            f"{BASE}/climber/{climber_id}",
+            f"{BASE}/climber/{owner_id}",
+            headers={"Authorization": f"******"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["email"] == "private@example.com"
+
+        resp = await client.get(
+            f"{BASE}/climber/{other_id}",
             headers={"Authorization": f"******"},
         )
         assert resp.status_code == 403
 
-        await promote_to_admin(engine, climber_id)
+        await promote_to_admin(engine, owner_id)
         resp = await client.get(
-            f"{BASE}/climber/{climber_id}",
+            f"{BASE}/climber/{other_id}",
             headers={"Authorization": f"******"},
         )
         assert resp.status_code == 200
-        assert resp.json()["username"] == "fetched"
-        assert resp.json()["email"] == "private@example.com"
+        assert resp.json()["username"] == "other"
 
     async def test_get_nonexistent_climber_returns_404(self, client, engine):
         signup_resp = await signup(client)
