@@ -1,11 +1,23 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api.router import api_router
+from security.hashing import prepare_dummy_hash
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    await prepare_dummy_hash()
+    yield
+
 
 app = FastAPI(title="Grepp API (FastAPI Edition)",
     version="1.0.0",
+    lifespan=lifespan,
     swagger_ui_parameters={
         "persistAuthorization": True,
     },

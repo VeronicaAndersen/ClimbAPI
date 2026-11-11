@@ -44,13 +44,25 @@ def needs_rehash(password_hash: str) -> bool:
 
 @lru_cache(maxsize=1)
 def _dummy_hash() -> str:
-    """A hash of a random value, computed once with the current parameters."""
+    """
+    A hash of a random value, computed once with the current parameters.
+
+    Computed at startup by ``prepare_dummy_hash`` so the first unknown-user
+    login is not slower than the rest (which would reveal that the username
+    does not exist).
+    """
     return hash_password(os.urandom(32).hex())
 
 
 def _verify_dummy(plain_password: str) -> bool:
     verify_password(plain_password, _dummy_hash())
     return False
+
+
+async def prepare_dummy_hash() -> None:
+    """Compute the dummy hash off the event loop; call once at startup."""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(_HASH_EXECUTOR, _dummy_hash)
 
 
 async def hash_password_async(plain_password: str) -> str:

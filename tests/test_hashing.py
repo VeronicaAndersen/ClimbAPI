@@ -114,3 +114,21 @@ async def test_verify_password_async_does_not_block_event_loop():
         task.cancel()
 
     assert ticks >= 5
+
+
+async def test_prepare_dummy_hash_computes_it_eagerly():
+    from security.hashing import _dummy_hash, prepare_dummy_hash
+
+    _dummy_hash.cache_clear()
+    await prepare_dummy_hash()
+    assert _dummy_hash.cache_info().currsize == 1
+
+
+async def test_app_startup_prepares_dummy_hash():
+    """Regression: the first unknown-user login must not pay for the hash."""
+    from main import app
+    from security.hashing import _dummy_hash
+
+    _dummy_hash.cache_clear()
+    async with app.router.lifespan_context(app):
+        assert _dummy_hash.cache_info().currsize == 1
