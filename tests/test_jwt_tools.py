@@ -133,7 +133,7 @@ class TestDecodeToken:
     def test_wrong_secret_raises(self):
         token = create_access_token("u")
         with pytest.raises(pyjwt.InvalidSignatureError):
-            pyjwt.decode(token, "wrong-secret", algorithms=[settings.JWT_ALG])
+            pyjwt.decode(token, "wrong-secret", algorithms=[JWT_ALG])
 
     def test_tampered_token_raises(self):
         token = create_access_token("u")
