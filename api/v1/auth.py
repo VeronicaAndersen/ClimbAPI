@@ -18,7 +18,7 @@ from schema.auth import (
     PasswordResetConfirm,
     MessageResponse,
 )
-from schema.climber import ClimberCreate, AuthOut
+from schema.climber import ClimberCreate, AuthOut, normalize_username
 from security.hashing import (
     hash_password_async,
     needs_rehash,
@@ -50,6 +50,9 @@ async def authenticate_user(session: AsyncSession, username: str, password: str)
     Raises 429 when the username has too many recent failed attempts and 401
     when the credentials are invalid.
     """
+    # Stored usernames are normalized at signup, so match that form here and
+    # key the throttle on it, otherwise "Alice" and "alice" differ.
+    username = normalize_username(username)
     retry_after = login_throttle.retry_after(username)
     if retry_after is not None:
         raise HTTPException(
@@ -142,7 +145,7 @@ async def request_password_reset(
     background_tasks: BackgroundTasks,
     session: Session,
 ):
-    username = body.username.strip().lower()
+    username = normalize_username(body.username)
     user = await session.scalar(select(Climber).where(Climber.username == username))
 
     if user and user.email:

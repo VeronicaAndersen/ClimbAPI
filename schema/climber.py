@@ -6,6 +6,11 @@ from pydantic import BaseModel, constr, field_validator
 from schema.auth import TokenPair
 
 
+def normalize_username(username: str) -> str:
+    """Canonical form of a username: trimmed and lowercased, as stored."""
+    return username.strip().lower()
+
+
 class ClimberCreate(BaseModel):
     username: constr(min_length=1, max_length=200)
     password: constr(min_length=6, max_length=1024)
@@ -18,7 +23,7 @@ class ClimberCreate(BaseModel):
     @classmethod
     def trim_lowercase_username(cls, v: str) -> str:
         """Trim and lowercase username."""
-        return v.strip().lower() if v else v
+        return normalize_username(v) if v else v
 
     @field_validator('firstname', 'lastname')
     @classmethod
@@ -47,7 +52,7 @@ class ClimberUpdate(BaseModel):
     @classmethod
     def trim_lowercase_username(cls, v: Optional[str]) -> Optional[str]:
         """Trim and lowercase username."""
-        return v.strip().lower() if v else v
+        return normalize_username(v) if v else v
 
     @field_validator('firstname', 'lastname')
     @classmethod

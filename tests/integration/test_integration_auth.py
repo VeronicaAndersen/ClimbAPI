@@ -119,13 +119,20 @@ class TestLogin:
             "username": "MIXEDCASE",
             "password": "secret123",
         })
-        # The login endpoint itself doesn't lowercase — signup stored "mixedcase"
-        # Lowercase the username in the test just as the frontend does
-        resp2 = await client.post(f"{BASE}/auth/login", json={
-            "username": "mixedcase",
-            "password": "secret123",
-        })
-        assert resp2.status_code == 200
+        assert resp.status_code == 200
+
+    async def test_login_trims_username_whitespace(self, client):
+        await signup(client, username="spaced")
+        resp = await login(client, username="  Spaced ")
+        assert resp.status_code == 200
+
+    async def test_token_endpoint_normalizes_username(self, client):
+        await signup(client, username="formuser")
+        resp = await client.post(
+            f"{BASE}/auth/token",
+            data={"username": " FormUser", "password": "secret123"},
+        )
+        assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------
