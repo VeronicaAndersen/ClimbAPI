@@ -138,3 +138,65 @@ class TestUsernameThrottle:
         for _ in range(rate_limit_settings.LOGIN_MAX_FAILURES - 1):
             assert (await login(client, password="wrongpassword")).status_code == 401
         assert (await login(client)).status_code == 200
+
+
+class TestLimitRunsBeforeRequestHandling:
+    async def test_rejected_request_does_not_open_db_session(self, client):
+        from db.config import get_session
+
+        for i in range(10):
+            await login(client, username=f"nobody{i}")
+
+        opened = 0
+        installed = app.dependency_overrides[get_session]
+
+        async def counting_session():
+            nonlocal opened
+            opened += 1
+            async for session in installed():
+                yield session
+
+        app.dependency_overrides[get_session] = counting_session
+        assert_429(await login(client, username="x"))
+        assert opened == 0
+
+    async def test_rejected_request_body_is_not_validated(self, client):
+        for _ in range(5):
+            await client.post(f"{BASE}/auth/signup", json={})
+        # Over the limit, an invalid body gets 429 rather than 422.
+        assert_429(await client.post(f"{BASE}/auth/signup", json={}))
+
+    async def test_rejected_form_is_not_parsed(self, client):
+        for i in range(10):
+            await login(client, username=f"nobody{i}")
+        resp = await client.post(f"{BASE}/auth/token", content=b"\xff\xfe not a form")
+        assert_429(resp)
+
+
+def _api_routes(routes):
+    """Yield every APIRoute, descending into included routers."""
+    from fastapi.routing import APIRoute
+
+    for route in routes:
+        if isinstance(route, APIRoute):
+            yield route
+        # FastAPI keeps included routers as nested route objects.
+        nested = getattr(route, "original_router", None) or getattr(route, "routes", None)
+        if nested is not None:
+            yield from _api_routes(getattr(nested, "routes", nested))
+
+
+def test_every_rate_limited_endpoint_is_enforced():
+    """A limit decorator only works on a RateLimitedRoute; catch a missing route_class."""
+    from security.rate_limit import RateLimitedRoute, route_limit_of
+
+    limited = [r for r in _api_routes(app.routes) if route_limit_of(r.endpoint) is not None]
+    assert {r.path for r in limited} >= {
+        "/auth/login",
+        "/auth/token",
+        "/auth/signup",
+        "/auth/password-reset/request",
+        "/auth/password-reset/confirm",
+        "/auth/refresh",
+    }
+    assert all(isinstance(r, RateLimitedRoute) for r in limited)

@@ -29,6 +29,7 @@ from security.jwt_tools import create_access_token, create_refresh_token, decode
 from security.login_throttle import login_throttle
 from security.rate_limit import (
     RATE_LIMITED_RESPONSE,
+    RateLimitedRoute,
     TOO_MANY_REQUESTS_DETAIL,
     login_rate_limit,
     password_reset_confirm_rate_limit,
@@ -40,7 +41,8 @@ from services.email import send_password_reset_email
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+# RateLimitedRoute enforces the @..._rate_limit decorators below.
+router = APIRouter(prefix="/auth", tags=["auth"], route_class=RateLimitedRoute)
 
 
 async def authenticate_user(session: AsyncSession, username: str, password: str) -> Climber:

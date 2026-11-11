@@ -11,4 +11,4 @@ PyJWT
 python-multipart
 fastapi-mail
 aiosmtplib
-slowapi
+limits

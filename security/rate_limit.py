@@ -1,10 +1,15 @@
 """
 Per-client-IP rate limiting for the auth endpoints.
 
+A limit is attached to an endpoint with a decorator (``@login_rate_limit``)
+and enforced by ``RateLimitedRoute``, the router's route class. The check runs
+before FastAPI reads the body or resolves dependencies, so a rejected request
+never parses a form or opens a database session.
+
 Limits are kept in process memory, which is correct for the single uvicorn
 worker the Dockerfile runs. With several workers or replicas each process
-would count on its own; switch ``storage_uri`` to a shared store (Redis)
-before scaling out.
+would count on its own; switch the storage to a shared store (Redis) before
+scaling out.
 
 The client IP is ``request.client.host``. Behind a reverse proxy, run uvicorn
 with ``--proxy-headers --forwarded-allow-ips=<proxy ip>`` so that value is the
@@ -15,14 +20,17 @@ because any client can set it.
 import math
 import os
 import time
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass
+from typing import Any, TypeVar
 
-from fastapi import Request
+from fastapi import Request, Response
 from fastapi.responses import JSONResponse
-from limits import parse_many
+from fastapi.routing import APIRoute
+from limits import RateLimitItem, parse_many
+from limits.storage import MemoryStorage
+from limits.strategies import FixedWindowRateLimiter
 from pydantic import BaseModel, ConfigDict, field_validator
-from slowapi import Limiter
-from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
 TOO_MANY_REQUESTS_DETAIL = "Too many requests. Please try again later."
 
@@ -98,11 +106,114 @@ def load_rate_limit_settings() -> RateLimitSettings:
 
 rate_limit_settings = load_rate_limit_settings()
 
-limiter = Limiter(
-    key_func=get_remote_address,
-    storage_uri="memory://",
-    enabled=rate_limit_settings.ENABLED,
-)
+_ROUTE_LIMIT_ATTR = "__route_rate_limit__"
+
+EndpointT = TypeVar("EndpointT", bound=Callable[..., Any])
+
+
+def client_ip(request: Request) -> str:
+    """The connection address; see the module docstring about proxies."""
+    if request.client is None or not request.client.host:
+        return "unknown"
+    return request.client.host
+
+
+class RateLimiter:
+    """Fixed-window counters per (scope, client IP), held in memory."""
+
+    def __init__(self, *, enabled: bool) -> None:
+        self.enabled = enabled
+        self._storage = MemoryStorage()
+        self._strategy = FixedWindowRateLimiter(self._storage)
+
+    def limit(self, value: str) -> Callable[[EndpointT], EndpointT]:
+        """Limit one endpoint on its own budget."""
+
+        def decorator(endpoint: EndpointT) -> EndpointT:
+            scope = f"{endpoint.__module__}.{endpoint.__qualname__}"
+            return _attach(endpoint, RouteLimit(self, tuple(parse_many(value)), scope))
+
+        return decorator
+
+    def shared_limit(self, value: str, scope: str) -> Callable[[EndpointT], EndpointT]:
+        """Limit several endpoints on one budget, identified by ``scope``."""
+        route_limit = RouteLimit(self, tuple(parse_many(value)), scope)
+
+        def decorator(endpoint: EndpointT) -> EndpointT:
+            return _attach(endpoint, route_limit)
+
+        return decorator
+
+    def hit(self, items: tuple[RateLimitItem, ...], scope: str, key: str) -> int | None:
+        """
+        Count one request; return seconds to wait if it is over a limit.
+
+        A rejected request does not use up budget in the other limits. The
+        calls do not await, so test-then-hit is atomic on the event loop.
+        """
+        if not self.enabled:
+            return None
+        exceeded = [item for item in items if not self._strategy.test(item, scope, key)]
+        if exceeded:
+            return max(self._seconds_until_reset(item, scope, key) for item in exceeded)
+        for item in items:
+            self._strategy.hit(item, scope, key)
+        return None
+
+    def reset(self) -> None:
+        self._storage.reset()
+
+    def _seconds_until_reset(self, item: RateLimitItem, scope: str, key: str) -> int:
+        reset_at, _remaining = self._strategy.get_window_stats(item, scope, key)
+        return max(1, math.ceil(reset_at - time.time()))
+
+
+@dataclass(frozen=True)
+class RouteLimit:
+    limiter: RateLimiter
+    items: tuple[RateLimitItem, ...]
+    scope: str
+
+    def check(self, request: Request) -> int | None:
+        return self.limiter.hit(self.items, self.scope, client_ip(request))
+
+
+def _attach(endpoint: EndpointT, route_limit: RouteLimit) -> EndpointT:
+    if hasattr(endpoint, _ROUTE_LIMIT_ATTR):
+        raise RuntimeError(f"{endpoint.__qualname__} already has a rate limit")
+    setattr(endpoint, _ROUTE_LIMIT_ATTR, route_limit)
+    return endpoint
+
+
+def route_limit_of(endpoint: Callable[..., Any]) -> RouteLimit | None:
+    return getattr(endpoint, _ROUTE_LIMIT_ATTR, None)
+
+
+class RateLimitedRoute(APIRoute):
+    """
+    Route class that enforces the endpoint's rate limit first.
+
+    FastAPI reads and parses the body before it resolves dependencies, so a
+    dependency would run too late. Wrapping the route handler runs the check
+    before any of that work.
+    """
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handler = super().get_route_handler()
+        route_limit = route_limit_of(self.endpoint)
+        if route_limit is None:
+            return handler
+
+        async def rate_limited_handler(request: Request) -> Response:
+            retry_after = route_limit.check(request)
+            if retry_after is not None:
+                return too_many_requests_response(retry_after)
+            return await handler(request)
+
+        return rate_limited_handler
+
+
+limiter = RateLimiter(enabled=rate_limit_settings.ENABLED)
 
 # /login and /token accept the same credentials, so they share one budget.
 login_rate_limit = limiter.shared_limit(rate_limit_settings.LOGIN, scope="auth-login")
@@ -117,24 +228,9 @@ refresh_rate_limit = limiter.limit(rate_limit_settings.REFRESH)
 
 
 def too_many_requests_response(retry_after_seconds: int) -> JSONResponse:
+    """429 with a generic body and Retry-After; never echoes the limit or key."""
     return JSONResponse(
         status_code=429,
         content={"detail": TOO_MANY_REQUESTS_DETAIL},
         headers={"Retry-After": str(max(1, retry_after_seconds))},
     )
-
-
-def _retry_after_seconds(request: Request, exc: RateLimitExceeded) -> int:
-    view_limit = getattr(request.state, "view_rate_limit", None)
-    if view_limit is not None:
-        item, keys = view_limit
-        reset_at, _remaining = limiter.limiter.get_window_stats(item, *keys)
-        return math.ceil(reset_at - time.time())
-    return int(exc.limit.limit.get_expiry())
-
-
-async def rate_limit_exceeded_handler(request: Request, exc: Exception) -> JSONResponse:
-    """429 with a generic body and Retry-After; never echoes the limit or key."""
-    if not isinstance(exc, RateLimitExceeded):  # pragma: no cover - registration guard
-        raise exc
-    return too_many_requests_response(_retry_after_seconds(request, exc))
