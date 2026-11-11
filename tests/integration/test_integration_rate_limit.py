@@ -3,7 +3,7 @@ Integration tests for rate limiting on the auth endpoints.
 
 The autouse ``reset_rate_limits`` fixture in conftest.py clears limiter and
 throttle state before each test. Defaults: login/token share 10/minute per IP,
-signup 5/minute, and 5 attempts per username in 15 minutes.
+signup 5/minute, and 5 failed logins per (username, client IP) in 15 minutes.
 """
 
 import pytest
@@ -101,7 +101,8 @@ class TestUsernameThrottle:
             resp = await login(client, password="wrongpassword")
             assert resp.status_code == 401
 
-        # Even the correct password is refused while the username is locked.
+        # Even the correct password is refused from this IP while it is locked,
+        # otherwise 200 vs 429 would reveal a correct guess.
         resp = await login(client)
         assert_429(resp)
         assert (
@@ -128,6 +129,22 @@ class TestUsernameThrottle:
         for _ in range(rate_limit_settings.LOGIN_MAX_FAILURES):
             await login(client, username="RateLimited", password="wrongpassword")
         assert (await login(client, username="ratelimited")).status_code == 429
+
+    async def test_attacker_cannot_lock_out_user_on_another_ip(self, client):
+        """Regression: failures from one IP used to lock the username everywhere."""
+        await signup(client)
+        attacker = ASGITransport(app=app, client=("203.0.113.66", 40000))
+        async with AsyncClient(transport=attacker, base_url="http://test") as evil:
+            for _ in range(rate_limit_settings.LOGIN_MAX_FAILURES):
+                assert (await login(evil, password="wrongpassword")).status_code == 401
+            assert_429(await login(evil, password="wrongpassword"))
+
+        assert (await login(client)).status_code == 200
+
+    async def test_successful_logins_do_not_count(self, client):
+        await signup(client)
+        for _ in range(rate_limit_settings.LOGIN_MAX_FAILURES + 1):
+            assert (await login(client)).status_code == 200
 
     async def test_successful_login_resets_failure_count(self, client):
         await signup(client)

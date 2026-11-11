@@ -58,6 +58,7 @@ _ENV_VARS = {
     "REFRESH": "RATE_LIMIT_REFRESH",
     "LOGIN_MAX_FAILURES": "LOGIN_MAX_FAILURES",
     "LOGIN_FAILURE_WINDOW_SECONDS": "LOGIN_FAILURE_WINDOW_SECONDS",
+    "LOGIN_MAX_FAILURES_PER_USERNAME": "LOGIN_MAX_FAILURES_PER_USERNAME",
 }
 
 
@@ -71,9 +72,12 @@ class RateLimitSettings(BaseModel):
     PASSWORD_RESET_REQUEST: str = "3/minute"
     PASSWORD_RESET_CONFIRM: str = "10/minute"
     REFRESH: str = "30/minute"
-    # Per username, across all IPs.
+    # Failed logins per (username, client IP).
     LOGIN_MAX_FAILURES: int = 5
     LOGIN_FAILURE_WINDOW_SECONDS: int = 900
+    # Failed logins per username across all IPs; past this, only IPs that
+    # have failed on the username are blocked.
+    LOGIN_MAX_FAILURES_PER_USERNAME: int = 50
 
     @field_validator(
         "LOGIN", "SIGNUP", "PASSWORD_RESET_REQUEST", "PASSWORD_RESET_CONFIRM", "REFRESH"
@@ -86,7 +90,9 @@ class RateLimitSettings(BaseModel):
             raise ValueError(f"Invalid rate limit string: {value!r}") from e
         return value
 
-    @field_validator("LOGIN_MAX_FAILURES", "LOGIN_FAILURE_WINDOW_SECONDS")
+    @field_validator(
+        "LOGIN_MAX_FAILURES", "LOGIN_FAILURE_WINDOW_SECONDS", "LOGIN_MAX_FAILURES_PER_USERNAME"
+    )
     @classmethod
     def must_be_positive(cls, value: int) -> int:
         if value < 1:

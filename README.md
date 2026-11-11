@@ -52,7 +52,7 @@ Mail settings are optional for local startup. Without configured mail credential
 
 ## Rate limiting
 
-The auth endpoints are rate limited per client IP, and login attempts are also limited per username. When a limit is hit the API returns `429 Too Many Requests` with a generic message and a `Retry-After` header (seconds).
+The auth endpoints are rate limited per client IP, and failed logins are also limited per username. When a limit is hit the API returns `429 Too Many Requests` with a generic message and a `Retry-After` header (seconds).
 
 | Environment variable | Default | Applies to |
 |---|---|---|
@@ -62,10 +62,13 @@ The auth endpoints are rate limited per client IP, and login attempts are also l
 | `RATE_LIMIT_PASSWORD_RESET_REQUEST` | `3/minute` | `/auth/password-reset/request`, per IP |
 | `RATE_LIMIT_PASSWORD_RESET_CONFIRM` | `10/minute` | `/auth/password-reset/confirm`, per IP |
 | `RATE_LIMIT_REFRESH` | `30/minute` | `/auth/refresh`, per IP |
-| `LOGIN_MAX_FAILURES` | `5` | Failed logins per username before it is blocked |
-| `LOGIN_FAILURE_WINDOW_SECONDS` | `900` | Sliding window for `LOGIN_MAX_FAILURES` |
+| `LOGIN_MAX_FAILURES` | `5` | Failed logins per username and client IP before that IP is blocked for the username |
+| `LOGIN_MAX_FAILURES_PER_USERNAME` | `50` | Failed logins per username across all IPs; past this, every IP that has failed on the username is blocked |
+| `LOGIN_FAILURE_WINDOW_SECONDS` | `900` | Sliding window for both failure limits |
 
-Limit strings use the [limits](https://limits.readthedocs.io/en/stable/quickstart.html#rate-limit-string-notation) notation, for example `10/minute` or `20/minute;100/hour`. Invalid values stop the app at startup. A successful login clears the per-username counter.
+Limit strings use the [limits](https://limits.readthedocs.io/en/stable/quickstart.html#rate-limit-string-notation) notation, for example `10/minute` or `20/minute;100/hour`. Invalid values stop the app at startup.
+
+Only failed logins count, and a successful login clears the counter for that username and IP. A blocked IP is refused even with the correct password, so a guesser cannot tell when they hit it. Because the block is per IP, someone guessing a user's password cannot lock the real user out from another network; once the per-username cap is reached, a new IP still gets through until its first failure. The throttle tracks at most 10,000 keys and never forgets an active one early; if it is full of active keys, new usernames get `429` until the oldest entry expires.
 
 Counters are kept in memory, which works because the container runs a single uvicorn worker. With several workers or replicas, each process counts on its own; move the storage to Redis before scaling out.
 

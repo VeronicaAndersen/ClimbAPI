@@ -31,6 +31,7 @@ from security.rate_limit import (
     RATE_LIMITED_RESPONSE,
     RateLimitedRoute,
     TOO_MANY_REQUESTS_DETAIL,
+    client_ip,
     login_rate_limit,
     password_reset_confirm_rate_limit,
     password_reset_request_rate_limit,
@@ -45,36 +46,40 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 router = APIRouter(prefix="/auth", tags=["auth"], route_class=RateLimitedRoute)
 
 
-async def authenticate_user(session: AsyncSession, username: str, password: str) -> Climber:
+async def authenticate_user(
+    session: AsyncSession, username: str, password: str, client_address: str
+) -> Climber:
     """
     Authenticate user and return Climber object.
 
-    Raises 429 when the username has too many recent failed attempts and 401
-    when the credentials are invalid.
+    Raises 429 when this client has too many recent failed attempts on the
+    username and 401 when the credentials are invalid.
     """
     # Stored usernames are normalized at signup, so match that form here and
     # key the throttle on it, otherwise "Alice" and "alice" differ.
     username = normalize_username(username)
-    retry_after = login_throttle.retry_after(username)
+    # Reserved up front so concurrent guesses cannot all pass the check; it
+    # stays recorded as a failure for this client unless the login succeeds.
+    retry_after = login_throttle.acquire(username, client_address)
     if retry_after is not None:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=TOO_MANY_REQUESTS_DETAIL,
             headers={"Retry-After": str(retry_after)},
         )
-    # Counted up front so concurrent guesses cannot all pass the check above.
-    login_throttle.register_attempt(username)
 
     user = await session.scalar(select(Climber).where(Climber.username == username))
     if user is None:
         # Do the same hashing work as for a real user so response timing does
         # not reveal whether the username exists.
         await verify_dummy_password_async(password)
+        login_throttle.failed(username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if not await verify_password_async(password, user.password):
+        login_throttle.failed(username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    login_throttle.reset(username)
+    login_throttle.succeeded(username, client_address)
 
     # Opportunistic rehash if password parameters changed
     if needs_rehash(user.password):
@@ -118,7 +123,7 @@ async def signup(request: Request, payload: ClimberCreate, session: Session):
 @router.post("/login", response_model=TokenPair, responses=RATE_LIMITED_RESPONSE)
 @login_rate_limit
 async def login(request: Request, body: LoginRequest, session: Session):
-    user = await authenticate_user(session, body.username, body.password)
+    user = await authenticate_user(session, body.username, body.password, client_ip(request))
     return TokenPair(
         access_token=create_access_token(user.id, extra={"username": user.username}),
         refresh_token=create_refresh_token(user.id),
@@ -132,7 +137,9 @@ async def token(request: Request, form_data: Annotated[OAuth2PasswordRequestForm
     OAuth2 compatible token endpoint for Swagger UI authorization.
     Uses the same logic as /login but accepts OAuth2PasswordRequestForm.
     """
-    user = await authenticate_user(session, form_data.username, form_data.password)
+    user = await authenticate_user(
+        session, form_data.username, form_data.password, client_ip(request)
+    )
     return TokenPair(
         access_token=create_access_token(user.id, extra={"username": user.username}),
         refresh_token=create_refresh_token(user.id),

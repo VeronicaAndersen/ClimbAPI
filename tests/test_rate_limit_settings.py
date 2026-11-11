@@ -16,6 +16,7 @@ def test_defaults():
     assert settings.REFRESH == "30/minute"
     assert settings.LOGIN_MAX_FAILURES == 5
     assert settings.LOGIN_FAILURE_WINDOW_SECONDS == 900
+    assert settings.LOGIN_MAX_FAILURES_PER_USERNAME == 50
 
 
 def test_env_overrides(monkeypatch):
@@ -34,7 +35,10 @@ def test_invalid_limit_string_rejected(monkeypatch):
         load_rate_limit_settings()
 
 
-@pytest.mark.parametrize("name", ["LOGIN_MAX_FAILURES", "LOGIN_FAILURE_WINDOW_SECONDS"])
+@pytest.mark.parametrize(
+    "name",
+    ["LOGIN_MAX_FAILURES", "LOGIN_FAILURE_WINDOW_SECONDS", "LOGIN_MAX_FAILURES_PER_USERNAME"],
+)
 def test_non_positive_throttle_values_rejected(monkeypatch, name):
     monkeypatch.setenv(name, "0")
     with pytest.raises(ValidationError):
