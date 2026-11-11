@@ -11,10 +11,11 @@ worker the Dockerfile runs. With several workers or replicas each process
 would count on its own; switch the storage to a shared store (Redis) before
 scaling out.
 
-The client IP is ``request.client.host``. Behind a reverse proxy, run uvicorn
-with ``--proxy-headers --forwarded-allow-ips=<proxy ip>`` so that value is the
-real client and not the proxy. X-Forwarded-For is deliberately not read here,
-because any client can set it.
+The client IP is ``request.client.host``. Behind a reverse proxy, uvicorn
+must run with ``--proxy-headers --forwarded-allow-ips=<proxy ip>`` so that
+value is the real client and not the proxy; the Dockerfile does this with the
+``FORWARDED_ALLOW_IPS`` environment variable. X-Forwarded-For is deliberately
+not read here, because any client can set it.
 """
 
 import math
