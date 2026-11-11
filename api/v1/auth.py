@@ -19,7 +19,12 @@ from schema.auth import (
     MessageResponse,
 )
 from schema.climber import ClimberCreate, AuthOut
-from security.hashing import verify_password, needs_rehash, hash_password
+from security.hashing import (
+    hash_password_async,
+    needs_rehash,
+    verify_dummy_password_async,
+    verify_password_async,
+)
 from security.jwt_tools import create_access_token, create_refresh_token, decode_token
 from services.email import send_password_reset_email
 
@@ -31,12 +36,17 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 async def authenticate_user(session: AsyncSession, username: str, password: str) -> Climber:
     """Authenticate user and return Climber object, raise 401 if invalid."""
     user = await session.scalar(select(Climber).where(Climber.username == username))
-    if not user or not verify_password(password, user.password):
+    if user is None:
+        # Do the same hashing work as for a real user so response timing does
+        # not reveal whether the username exists.
+        await verify_dummy_password_async(password)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    if not await verify_password_async(password, user.password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     # Opportunistic rehash if password parameters changed
     if needs_rehash(user.password):
-        user.password = hash_password(password)
+        user.password = await hash_password_async(password)
         await session.commit()
 
     return user
@@ -53,7 +63,7 @@ async def signup(payload: ClimberCreate, session: Session):
     climber = Climber(
         **climber_data,
         user_scope="climber",
-        password=hash_password(payload.password),
+        password=await hash_password_async(payload.password),
     )
     session.add(climber)
 
@@ -153,7 +163,7 @@ async def confirm_password_reset(body: PasswordResetConfirm, session: Session):
     if not user:
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
 
-    user.password = hash_password(body.new_password)
+    user.password = await hash_password_async(body.new_password)
     reset_token.used = True
     await session.commit()
 
