@@ -44,9 +44,14 @@ class Settings(BaseModel):
     REFRESH_TTL: int = int(os.getenv("REFRESH_TTL_DAYS", "7"))
     ISSUER: str = os.getenv("JWT_ISSUER", "climb-api")
 
-    @field_validator("JWT_SECRET")
+    # mode="before" so a missing secret (None) gets the same clear error as a
+    # weak one instead of a generic type error. RuntimeError is not wrapped
+    # by pydantic, so startup fails with this message.
+    @field_validator("JWT_SECRET", mode="before")
     @classmethod
-    def jwt_secret_must_be_strong(cls, value: str) -> str:
+    def jwt_secret_must_be_strong(cls, value: object) -> str:
+        if value is not None and not isinstance(value, str):
+            raise TypeError("JWT_SECRET must be a string.")
         return validate_jwt_secret(value)
 
     @property
@@ -60,7 +65,8 @@ class Settings(BaseModel):
 
 def load_settings() -> Settings:
     check_jwt_alg_env(os.getenv(_JWT_ALG_ENV))
-    return Settings(JWT_SECRET=validate_jwt_secret(os.getenv("JWT_SECRET")))
+    # Settings validates the secret; do not validate it here as well.
+    return Settings(JWT_SECRET=os.getenv("JWT_SECRET"))
 
 
 settings = load_settings()
