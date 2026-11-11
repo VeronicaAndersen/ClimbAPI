@@ -12,10 +12,12 @@ Prerequisites: Python 3.14, a running PostgreSQL server, and [dbmate](https://gi
 DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@127.0.0.1:5432/grepp?sslmode=disable"
 ASYNC_DATABASE_URL="postgresql+asyncpg://postgres:YOUR_PASSWORD@127.0.0.1:5432/grepp"
 PASSWORD_PEPPER="replace-with-a-long-random-secret"
+# Generate with: openssl rand -base64 32
+JWT_SECRET="paste-the-generated-value"
 FRONTEND_URL="http://localhost:5173"
 ```
 
-Use the username, password, and database name configured for your local PostgreSQL installation. Keep `.env` out of version control.
+Use the username, password, and database name configured for your local PostgreSQL installation. `JWT_SECRET` has no default: the process refuses to start unless it is a random value of at least 32 bytes. Keep `.env` out of version control.
 
 Create and activate a Python 3.14 virtual environment, install dependencies, load the environment, and run migrations. If `.venv` already exists and was created with another Python version, remove it first (`rm -rf .venv`):
 

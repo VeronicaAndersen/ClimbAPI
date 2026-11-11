@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 
 import jwt
 
-from schema.setting import settings
+from schema.setting import JWT_ALG, settings
 
 
 def _now() -> datetime:
@@ -26,7 +26,7 @@ def create_access_token(sub: str | int, extra: Optional[Dict[str, Any]] = None) 
         "exp": int((now + settings.access_delta).timestamp()),
         "type": "access",
     })
-    return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALG)
+    return jwt.encode(payload, settings.JWT_SECRET, algorithm=JWT_ALG)
 
 
 def create_refresh_token(sub: str | int, jti: Optional[str] = None) -> str:
@@ -42,14 +42,14 @@ def create_refresh_token(sub: str | int, jti: Optional[str] = None) -> str:
     }
     if jti:
         payload["jti"] = jti
-    return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALG)
+    return jwt.encode(payload, settings.JWT_SECRET, algorithm=JWT_ALG)
 
 
 def decode_token(token: str) -> dict:
     return jwt.decode(
         token,
         settings.JWT_SECRET,
-        algorithms=[settings.JWT_ALG],
+        algorithms=[JWT_ALG],
         options={"require": ["exp", "iat", "nbf", "sub"]},
         leeway=10,  # leeway handles small clock skews
         issuer=settings.ISSUER,
