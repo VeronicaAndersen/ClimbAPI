@@ -212,21 +212,21 @@ class TestGetClimberById:
 
         resp = await client.get(
             f"{BASE}/climber/{owner_id}",
-            headers={"Authorization": f"******"},
+            headers={"Authorization": f"Bearer {owner_token}"},
         )
         assert resp.status_code == 200
         assert resp.json()["email"] == "private@example.com"
 
         resp = await client.get(
             f"{BASE}/climber/{other_id}",
-            headers={"Authorization": f"******"},
+            headers={"Authorization": f"Bearer {owner_token}"},
         )
         assert resp.status_code == 403
 
         await promote_to_admin(engine, owner_id)
         resp = await client.get(
             f"{BASE}/climber/{other_id}",
-            headers={"Authorization": f"******"},
+            headers={"Authorization": f"Bearer {owner_token}"},
         )
         assert resp.status_code == 200
         assert resp.json()["username"] == "other"
