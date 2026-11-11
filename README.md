@@ -49,3 +49,32 @@ python -m pytest -q
 ```
 
 Mail settings are optional for local startup. Without configured mail credentials, password-reset links are printed for development.
+
+## Rate limiting
+
+The auth endpoints are rate limited per client IP, and login attempts are also limited per username. When a limit is hit the API returns `429 Too Many Requests` with a generic message and a `Retry-After` header (seconds).
+
+| Environment variable | Default | Applies to |
+|---|---|---|
+| `RATE_LIMIT_ENABLED` | `true` | Turns all limits below on or off |
+| `RATE_LIMIT_LOGIN` | `10/minute` | `/auth/login` and `/auth/token` together, per IP |
+| `RATE_LIMIT_SIGNUP` | `5/minute` | `/auth/signup`, per IP |
+| `RATE_LIMIT_PASSWORD_RESET_REQUEST` | `3/minute` | `/auth/password-reset/request`, per IP |
+| `RATE_LIMIT_PASSWORD_RESET_CONFIRM` | `10/minute` | `/auth/password-reset/confirm`, per IP |
+| `RATE_LIMIT_REFRESH` | `30/minute` | `/auth/refresh`, per IP |
+| `LOGIN_MAX_FAILURES` | `5` | Failed logins per username before it is blocked |
+| `LOGIN_FAILURE_WINDOW_SECONDS` | `900` | Sliding window for `LOGIN_MAX_FAILURES` |
+
+Limit strings use the [limits](https://limits.readthedocs.io/en/stable/quickstart.html#rate-limit-string-notation) notation, for example `10/minute` or `20/minute;100/hour`. Invalid values stop the app at startup. A successful login clears the per-username counter.
+
+Counters are kept in memory, which works because the container runs a single uvicorn worker. With several workers or replicas, each process counts on its own; move the storage to Redis before scaling out.
+
+**Behind a reverse proxy** the limiter must see the real client IP. The app uses the connection address and does not read `X-Forwarded-For` itself, because clients can forge it. Run uvicorn with proxy headers trusted only from your proxy:
+
+```sh
+python -m uvicorn main:app --host 0.0.0.0 --port 8080 --proxy-headers --forwarded-allow-ips="<proxy-ip>"
+```
+
+Without this, every request appears to come from the proxy and all clients share one budget.
+
+Password hashing (Argon2) runs on a small dedicated thread pool so it does not block the event loop. `ARGON2_MAX_CONCURRENCY` (default `4`) caps parallel hashes, and with it peak memory (each hash uses `ARGON2_MEMORY_KIB`, default 64 MiB).

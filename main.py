@@ -1,9 +1,10 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 
 from api.router import api_router
-
+from security.rate_limit import limiter, rate_limit_exceeded_handler
 
 app = FastAPI(title="Grepp API (FastAPI Edition)",
     version="1.0.0",
@@ -19,6 +20,9 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     allow_headers=["*"],
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 app.include_router(api_router)
 

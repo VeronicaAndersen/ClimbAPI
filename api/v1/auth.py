@@ -2,7 +2,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select, and_
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +26,16 @@ from security.hashing import (
     verify_password_async,
 )
 from security.jwt_tools import create_access_token, create_refresh_token, decode_token
+from security.login_throttle import login_throttle
+from security.rate_limit import (
+    RATE_LIMITED_RESPONSE,
+    TOO_MANY_REQUESTS_DETAIL,
+    login_rate_limit,
+    password_reset_confirm_rate_limit,
+    password_reset_request_rate_limit,
+    refresh_rate_limit,
+    signup_rate_limit,
+)
 from services.email import send_password_reset_email
 
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -34,7 +44,22 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 async def authenticate_user(session: AsyncSession, username: str, password: str) -> Climber:
-    """Authenticate user and return Climber object, raise 401 if invalid."""
+    """
+    Authenticate user and return Climber object.
+
+    Raises 429 when the username has too many recent failed attempts and 401
+    when the credentials are invalid.
+    """
+    retry_after = login_throttle.retry_after(username)
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=TOO_MANY_REQUESTS_DETAIL,
+            headers={"Retry-After": str(retry_after)},
+        )
+    # Counted up front so concurrent guesses cannot all pass the check above.
+    login_throttle.register_attempt(username)
+
     user = await session.scalar(select(Climber).where(Climber.username == username))
     if user is None:
         # Do the same hashing work as for a real user so response timing does
@@ -44,6 +69,8 @@ async def authenticate_user(session: AsyncSession, username: str, password: str)
     if not await verify_password_async(password, user.password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
+    login_throttle.reset(username)
+
     # Opportunistic rehash if password parameters changed
     if needs_rehash(user.password):
         user.password = await hash_password_async(password)
@@ -52,8 +79,9 @@ async def authenticate_user(session: AsyncSession, username: str, password: str)
     return user
 
 
-@router.post("/signup", response_model=AuthOut, status_code=status.HTTP_201_CREATED)
-async def signup(payload: ClimberCreate, session: Session):
+@router.post("/signup", response_model=AuthOut, status_code=status.HTTP_201_CREATED, responses=RATE_LIMITED_RESPONSE)
+@signup_rate_limit
+async def signup(request: Request, payload: ClimberCreate, session: Session):
     # Check username uniqueness
     exists = await session.scalar(select(Climber.id).where(Climber.username == payload.username))
     if exists:
@@ -82,8 +110,9 @@ async def signup(payload: ClimberCreate, session: Session):
     )
 
 
-@router.post("/login", response_model=TokenPair)
-async def login(body: LoginRequest, session: Session):
+@router.post("/login", response_model=TokenPair, responses=RATE_LIMITED_RESPONSE)
+@login_rate_limit
+async def login(request: Request, body: LoginRequest, session: Session):
     user = await authenticate_user(session, body.username, body.password)
     return TokenPair(
         access_token=create_access_token(user.id, extra={"username": user.username}),
@@ -91,8 +120,9 @@ async def login(body: LoginRequest, session: Session):
     )
 
 
-@router.post("/token", response_model=TokenPair)
-async def token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()], session: Session):
+@router.post("/token", response_model=TokenPair, responses=RATE_LIMITED_RESPONSE)
+@login_rate_limit
+async def token(request: Request, form_data: Annotated[OAuth2PasswordRequestForm, Depends()], session: Session):
     """
     OAuth2 compatible token endpoint for Swagger UI authorization.
     Uses the same logic as /login but accepts OAuth2PasswordRequestForm.
@@ -104,8 +134,10 @@ async def token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()], sess
     )
 
 
-@router.post("/password-reset/request", response_model=MessageResponse)
+@router.post("/password-reset/request", response_model=MessageResponse, responses=RATE_LIMITED_RESPONSE)
+@password_reset_request_rate_limit
 async def request_password_reset(
+    request: Request,
     body: PasswordResetRequest,
     background_tasks: BackgroundTasks,
     session: Session,
@@ -143,8 +175,9 @@ async def request_password_reset(
     return MessageResponse(message="Om e-postadressen finns i systemet har ett mail skickats.")
 
 
-@router.post("/password-reset/confirm", response_model=MessageResponse)
-async def confirm_password_reset(body: PasswordResetConfirm, session: Session):
+@router.post("/password-reset/confirm", response_model=MessageResponse, responses=RATE_LIMITED_RESPONSE)
+@password_reset_confirm_rate_limit
+async def confirm_password_reset(request: Request, body: PasswordResetConfirm, session: Session):
     now = datetime.now(tz=timezone.utc)
     reset_token = await session.scalar(
         select(PasswordResetToken).where(
@@ -170,8 +203,9 @@ async def confirm_password_reset(body: PasswordResetConfirm, session: Session):
     return MessageResponse(message="Lösenordet har ändrats.")
 
 
-@router.post("/refresh", response_model=TokenPair)
-async def refresh(body: RefreshRequest, session: Session):
+@router.post("/refresh", response_model=TokenPair, responses=RATE_LIMITED_RESPONSE)
+@refresh_rate_limit
+async def refresh(request: Request, body: RefreshRequest, session: Session):
     try:
         payload = decode_token(body.refresh_token)
     except Exception:
