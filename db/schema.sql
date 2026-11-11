@@ -1,7 +1,7 @@
-\restrict R3IjUYXFI8wjwNVjNo7rAF6ThcmaNGPncV5DGTscTZIDr12OO1V1ITMFY0x93BA
+\restrict dbmate
 
--- Dumped from database version 15.15 (Postgres.app)
--- Dumped by pg_dump version 17.6 (Homebrew)
+-- Dumped from database version 17.11 (Homebrew)
+-- Dumped by pg_dump version 17.11 (Homebrew)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -90,7 +90,7 @@ CREATE TABLE public.competition (
     round_no integer,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT qualifier_round_ck CHECK ((((comp_type = 'QUALIFIER'::public.comp_type) AND ((round_no >= 1) AND (round_no <= 3))) OR ((comp_type = 'FINAL'::public.comp_type) AND (round_no IS NULL))))
+    CONSTRAINT qualifier_round_ck CHECK ((((comp_type = 'QUALIFIER'::public.comp_type) AND (round_no >= 1) AND (round_no <= 4)) OR ((comp_type = 'FINAL'::public.comp_type) AND (round_no IS NULL))))
 );
 
 
@@ -111,6 +111,39 @@ CREATE SEQUENCE public.competition_id_seq
 --
 
 ALTER SEQUENCE public.competition_id_seq OWNED BY public.competition.id;
+
+
+--
+-- Name: password_reset_token; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.password_reset_token (
+    id bigint NOT NULL,
+    user_id bigint NOT NULL,
+    token text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    used boolean DEFAULT false NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: password_reset_token_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.password_reset_token_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: password_reset_token_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.password_reset_token_id_seq OWNED BY public.password_reset_token.id;
 
 
 --
@@ -187,7 +220,7 @@ CREATE TABLE public.registration (
 --
 
 CREATE TABLE public.schema_migrations (
-    version character varying(128) NOT NULL
+    version character varying NOT NULL
 );
 
 
@@ -237,6 +270,13 @@ ALTER TABLE ONLY public.competition ALTER COLUMN id SET DEFAULT nextval('public.
 
 
 --
+-- Name: password_reset_token id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.password_reset_token ALTER COLUMN id SET DEFAULT nextval('public.password_reset_token_id_seq'::regclass);
+
+
+--
 -- Name: problem id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -259,11 +299,27 @@ ALTER TABLE ONLY public.climber
 
 
 --
+-- Name: climber climber_username_unique; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.climber
+    ADD CONSTRAINT climber_username_unique UNIQUE (username);
+
+
+--
 -- Name: competition competition_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.competition
     ADD CONSTRAINT competition_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: password_reset_token password_reset_token_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.password_reset_token
+    ADD CONSTRAINT password_reset_token_pkey PRIMARY KEY (id);
 
 
 --
@@ -315,6 +371,20 @@ ALTER TABLE ONLY public.season
 
 
 --
+-- Name: password_reset_token_token_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX password_reset_token_token_idx ON public.password_reset_token USING btree (token);
+
+
+--
+-- Name: password_reset_token_user_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX password_reset_token_user_id_idx ON public.password_reset_token USING btree (user_id);
+
+
+--
 -- Name: problem_comp_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -362,6 +432,14 @@ CREATE INDEX score_user_comp_idx ON public.problem_score USING btree (user_id, c
 
 ALTER TABLE ONLY public.competition
     ADD CONSTRAINT competition_season_id_fkey FOREIGN KEY (season_id) REFERENCES public.season(id) ON DELETE CASCADE;
+
+
+--
+-- Name: password_reset_token password_reset_token_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.password_reset_token
+    ADD CONSTRAINT password_reset_token_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.climber(id) ON DELETE CASCADE;
 
 
 --
@@ -416,7 +494,7 @@ ALTER TABLE ONLY public.registration
 -- PostgreSQL database dump complete
 --
 
-\unrestrict R3IjUYXFI8wjwNVjNo7rAF6ThcmaNGPncV5DGTscTZIDr12OO1V1ITMFY0x93BA
+\unrestrict dbmate
 
 
 --
@@ -429,4 +507,7 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20251124201937'),
     ('20260112'),
     ('20260125143541'),
-    ('20260125144000');
+    ('20260125144000'),
+    ('20260329000000'),
+    ('20260403000000'),
+    ('20260403000001');
