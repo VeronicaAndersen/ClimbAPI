@@ -14,7 +14,10 @@ an IPv6 /64, see ``security.client_address.client_ip``):
   failures block every /64 in that /48 for the username, including fresh
   ones. Without it, an attacker holding a /48 has 65,536 /64s and so that
   many extra guesses once the per-username cap is reached. A success does
-  not clear it, like the per-username counter;
+  not clear it, like the per-username counter. The lock lasts as long as
+  failures keep coming, not one window: about one failure a minute from a
+  few /64s in the /48 (or a mobile client that gets a new /64 on every
+  reconnect) keeps the username locked for the whole /48 indefinitely;
 * per client, distinct usernames with recent failures, only while the
   throttle is under pressure (see below): a client that has failed on
   ``max_usernames_per_client`` different usernames is then refused new
@@ -59,9 +62,12 @@ everyone else there out of new usernames. So it only applies while a counter
 holds at least ``pressure_ratio`` of ``max_tracked`` keys (default 10%, i.e.
 20,000 keys). Below that there is plenty of room and the cap is not needed;
 above it, filling the rest of the table takes failed logins from about 9,000
-distinct clients within one window. A user who has not failed before is only
-affected while the table is full, or, under pressure, when their address has
-already failed on many usernames.
+distinct clients within one window. Those clients are IPv6 /64s, and one /48
+holder has 65,536 of them, so in theory one holder can reach pressure or fill
+the table alone; the practical bound is that every failed login costs a full
+Argon2 hash. A user who has not failed before is only affected while the
+table is full, or, under pressure, when their address has already failed on
+many usernames.
 """
 
 import logging
