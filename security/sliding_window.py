@@ -15,7 +15,7 @@ class SlidingWindowLog[K: Hashable]:
     matter how many keys are tracked.
 
     Timestamps are short lists rather than deques: a deque costs about 1 KB
-    even when nearly empty, which matters with a million keys.
+    even when nearly empty, which matters with hundreds of thousands of keys.
     """
 
     def __init__(

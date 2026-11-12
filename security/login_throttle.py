@@ -32,14 +32,16 @@ be used to find out which usernames exist.
 State lives in process memory (one uvicorn worker). The methods do not await,
 so they are safe on the single event loop without a lock.
 
-Memory is bounded by ``max_tracked`` keys per counter (about 400 bytes each).
+Memory is bounded by ``max_tracked`` keys per counter. Each failed login
+costs roughly 600 bytes (short usernames) to 1 KB (200-character usernames)
+across both counters, so the default of 200,000 stays around 120-200 MB.
 Expired keys are dropped as time passes, but a key that still has attempts
 inside the window is never evicted: that would reset its counter and let an
 attacker flush it by trying many other usernames. When every slot holds an
 active key, new keys are refused for everyone (fail closed) until the oldest
 expires, and a warning is logged. The per-client username cap keeps that
 impractical: with the defaults, filling the table takes failed logins from
-about 50,000 distinct clients within one window. A user who has not failed
+about 10,000 distinct clients within one window. A user who has not failed
 before is only affected while the table is full.
 """
 
@@ -85,7 +87,7 @@ class LoginThrottle:
         max_failures_per_username: int,
         max_usernames_per_client: int,
         enabled: bool = True,
-        max_tracked: int = 1_000_000,
+        max_tracked: int = 200_000,
         clock: Callable[[], float] = time.monotonic,
         warning_interval_seconds: float = 60.0,
     ) -> None:

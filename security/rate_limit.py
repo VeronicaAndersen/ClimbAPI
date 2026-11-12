@@ -85,8 +85,9 @@ class RateLimitSettings(BaseModel):
     # Distinct usernames a client (IPv4 address or IPv6 /64) may have recent
     # failures on; past this it is refused new usernames.
     LOGIN_MAX_USERNAMES_PER_CLIENT: int = 20
-    # Entries per throttle counter; memory is roughly 400 bytes per entry.
-    LOGIN_THROTTLE_MAX_TRACKED: int = 1_000_000
+    # Entries per throttle counter. A failed login costs roughly 600 bytes to
+    # 1 KB across both counters, so 200,000 is about 120-200 MB when full.
+    LOGIN_THROTTLE_MAX_TRACKED: int = 200_000
 
     @field_validator(
         "LOGIN", "SIGNUP", "PASSWORD_RESET_REQUEST", "PASSWORD_RESET_CONFIRM", "REFRESH"
