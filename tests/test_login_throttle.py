@@ -132,6 +132,44 @@ def test_release_of_only_reservation_forgets_the_key():
     assert len(throttle._by_client) == 0
 
 
+def test_release_then_expiry_behind_active_keys_does_not_crash():
+    """
+    Regression: release() dropped the newest timestamp, leaving the key out of
+    expiry order; once its remaining failure expired while a later key was
+    still active, recent() indexed past the end and acquire() raised.
+    """
+    throttle, clock = make(window=900.0)
+    fail(throttle, username="alice")                  # t=1000
+    clock.now += 150
+    fail(throttle, username="bob")                    # t=1150
+    clock.now += 50
+    assert throttle.acquire("alice", IP) is None      # t=1200, then a DB error
+    throttle.release("alice", IP)
+
+    clock.now = 1000 + 901  # alice's real failure has expired, bob's has not
+    assert throttle.acquire("alice", IP) is None
+    assert throttle._by_client.recent(("alice", IP)) is not None
+    assert throttle._usernames_per_client == {IP: 2}
+
+    clock.now = 1901 + 901  # everything, including that last attempt, expired
+    assert throttle.acquire("carol", IP) is None
+    assert ("alice", IP) not in throttle._by_client
+    assert ("bob", IP) not in throttle._by_client
+    assert throttle._usernames_per_client == {IP: 1}
+
+
+def test_release_keeps_expiry_order():
+    throttle, clock = make(window=900.0)
+    fail(throttle, username="alice")
+    clock.now += 150
+    fail(throttle, username="bob")
+    clock.now += 50
+    assert throttle.acquire("alice", IP) is None
+    throttle.release("alice", IP)
+    latest = [ts[-1] for ts in throttle._by_client._entries.values()]
+    assert latest == sorted(latest)
+
+
 def test_release_without_reservation_is_a_no_op():
     throttle, _ = make()
     throttle.release("alice", IP)

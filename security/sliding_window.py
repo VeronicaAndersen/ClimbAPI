@@ -61,7 +61,12 @@ class SlidingWindowLog[K: Hashable]:
         if timestamps is None:
             return None
         cutoff = now - self.window_seconds
-        # The latest timestamp is inside the window, so this never empties it.
+        if timestamps[-1] <= cutoff:
+            # Not reachable while the expiry order holds (the front sweep above
+            # would have dropped it), but never index past the end if it does not.
+            del self._entries[key]
+            self._removed(key)
+            return None
         expired = 0
         while timestamps[expired] <= cutoff:
             expired += 1
@@ -101,21 +106,24 @@ class SlidingWindowLog[K: Hashable]:
         if self._entries.pop(key, None) is not None:
             self._removed(key)
 
-    def remove_latest(self, key: K) -> None:
+    def withdraw_one(self, key: K) -> None:
         """
-        Withdraw the newest timestamp for ``key``.
+        Take one attempt off ``key``'s count, e.g. a reservation handed back.
 
-        The key keeps its place in the expiry order even though its latest
-        timestamp may now be older. That only delays dropping it; the counts
-        from ``recent`` stay exact.
+        The oldest timestamp is dropped, not the newest. That keeps the key's
+        latest timestamp, and so its place in the expiry order, unchanged:
+        dropping the newest would leave the key behind keys that expire later,
+        and the front-only sweep would then miss it. The cost is that the
+        remaining count may expire a little later than exact, never earlier.
         """
         timestamps = self._entries.get(key)
         if timestamps is None:
             return
-        timestamps.pop()
-        if not timestamps:
+        if len(timestamps) == 1:
             del self._entries[key]
             self._removed(key)
+            return
+        del timestamps[0]
 
     def clear(self) -> None:
         self._entries.clear()

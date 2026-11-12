@@ -170,12 +170,12 @@ class LoginThrottle:
         Hand back a reservation whose password check never completed.
 
         For server-side errors (database, hashing): they say nothing about the
-        credentials, so they must not count as a failure. Only the newest
-        reservation is withdrawn; earlier failures stay.
+        credentials, so they must not count as a failure. The count drops by
+        one; earlier failures stay (see ``SlidingWindowLog.withdraw_one``).
         """
         if not self.enabled:
             return
-        self._by_client.remove_latest((normalize_username(username), client_ip))
+        self._by_client.withdraw_one((normalize_username(username), client_ip))
 
     def clear(self) -> None:
         self._by_client.clear()
