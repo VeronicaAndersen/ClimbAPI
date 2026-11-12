@@ -86,6 +86,27 @@ class TestLoginIpRateLimit:
             assert (await login(other, username="x")).status_code == 401
 
 
+    async def test_ipv6_clients_in_same_64_share_budget(self, client):
+        """Regression: rotating addresses inside a /64 bypassed the IP limit."""
+        for i in range(10):
+            transport = ASGITransport(app=app, client=(f"2001:db8:0:1::{i + 1:x}", 40000))
+            async with AsyncClient(transport=transport, base_url="http://test") as c:
+                assert (await login(c, username=f"nobody{i}")).status_code == 401
+        transport = ASGITransport(app=app, client=("2001:db8:0:1::ffff", 40000))
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            assert_429(await login(c, username="x"))
+
+    async def test_username_throttle_groups_ipv6_by_64(self, client):
+        await signup(client)
+        for i in range(rate_limit_settings.LOGIN_MAX_FAILURES):
+            transport = ASGITransport(app=app, client=(f"2001:db8:0:2::{i + 1:x}", 40000))
+            async with AsyncClient(transport=transport, base_url="http://test") as c:
+                assert (await login(c, password="wrongpassword")).status_code == 401
+        transport = ASGITransport(app=app, client=("2001:db8:0:2::ffff", 40000))
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            assert_429(await login(c))
+
+
 class TestSignupRateLimit:
     async def test_signup_returns_429_after_limit(self, client):
         for i in range(5):

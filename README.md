@@ -52,7 +52,7 @@ Mail settings are optional for local startup. Without configured mail credential
 
 ## Rate limiting
 
-The auth endpoints are rate limited per client IP, and failed logins are also limited per username. When a limit is hit the API returns `429 Too Many Requests` with a generic message and a `Retry-After` header (seconds).
+The auth endpoints are rate limited per client IP, and failed logins are also limited per username. IPv6 clients are grouped by their /64 network, since one customer usually controls a whole /64; IPv4-mapped IPv6 addresses count as the IPv4 address. When a limit is hit the API returns `429 Too Many Requests` with a generic message and a `Retry-After` header (seconds).
 
 | Environment variable | Default | Applies to |
 |---|---|---|
