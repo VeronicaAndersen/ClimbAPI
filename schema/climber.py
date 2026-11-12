@@ -11,6 +11,17 @@ def normalize_username(username: str) -> str:
     return username.strip().lower()
 
 
+def _normalized_username_within_limit(username: str) -> str:
+    """
+    Normalize and re-check the length: lowercasing can lengthen a string
+    ("İ" becomes two characters), so the raw-length check is not enough.
+    """
+    normalized = normalize_username(username)
+    if len(normalized) > USERNAME_MAX_LENGTH:
+        raise ValueError(f"username must be at most {USERNAME_MAX_LENGTH} characters")
+    return normalized
+
+
 class ClimberCreate(BaseModel):
     username: constr(min_length=1, max_length=USERNAME_MAX_LENGTH)
     password: constr(min_length=6, max_length=PASSWORD_MAX_LENGTH)
@@ -23,7 +34,7 @@ class ClimberCreate(BaseModel):
     @classmethod
     def trim_lowercase_username(cls, v: str) -> str:
         """Trim and lowercase username."""
-        return normalize_username(v) if v else v
+        return _normalized_username_within_limit(v) if v else v
 
     @field_validator('firstname', 'lastname')
     @classmethod
@@ -52,7 +63,7 @@ class ClimberUpdate(BaseModel):
     @classmethod
     def trim_lowercase_username(cls, v: Optional[str]) -> Optional[str]:
         """Trim and lowercase username."""
-        return normalize_username(v) if v else v
+        return _normalized_username_within_limit(v) if v else v
 
     @field_validator('firstname', 'lastname')
     @classmethod

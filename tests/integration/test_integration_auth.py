@@ -327,6 +327,32 @@ class TestCredentialLengthLimits:
         assert len(login_throttle._by_client) == 0
         assert len(login_throttle._by_username) == 0
 
+    @pytest.mark.parametrize("path", ["/auth/login", "/auth/token"])
+    async def test_username_too_long_after_lowercasing_is_rejected_without_throttling(
+        self, client, path
+    ):
+        """Regression: "İ" lowercases to two characters, doubling the length."""
+        from security.login_throttle import login_throttle
+
+        username = "İ" * 200
+        credentials = {"username": username, "password": "secret123"}
+        if path == "/auth/token":
+            resp = await client.post(f"{BASE}{path}", data=credentials)
+        else:
+            resp = await client.post(f"{BASE}{path}", json=credentials)
+        assert resp.status_code == 401
+        assert resp.json() == {"detail": "Invalid credentials"}
+        assert len(login_throttle._by_client) == 0
+
+    async def test_signup_rejects_username_too_long_after_lowercasing(self, client):
+        resp = await signup(client, username="İ" * 200)
+        assert resp.status_code == 422
+
+    async def test_signup_accepts_username_at_limit_after_lowercasing(self, client):
+        resp = await signup(client, username="İ" * 100)
+        assert resp.status_code == 201
+        assert (await login(client, username="İ" * 100)).status_code == 200
+
     async def test_password_reset_rejects_oversized_username(self, client):
         resp = await client.post(
             f"{BASE}/auth/password-reset/request", json={"username": "u" * 201}

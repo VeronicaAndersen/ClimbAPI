@@ -103,3 +103,9 @@ class TestAdminClimberUpdate:
     def test_can_set_climber_scope(self):
         c = AdminClimberUpdate(user_scope="climber")
         assert c.user_scope == "climber"
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+def test_username_length_is_checked_after_lowercasing(model):
+    with pytest.raises(ValidationError):
+        model(username="İ" * 200, password="secret123", firstname="A", lastname="B")
