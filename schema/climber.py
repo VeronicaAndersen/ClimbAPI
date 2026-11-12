@@ -13,10 +13,13 @@ def normalize_username(username: str) -> str:
 
 def _normalized_username_within_limit(username: str) -> str:
     """
-    Normalize and re-check the length: lowercasing can lengthen a string
-    ("İ" becomes two characters), so the raw-length check is not enough.
+    Normalize and re-check the length. The raw-length checks are not enough:
+    trimming can empty a string ("   "), and lowercasing can lengthen one
+    ("İ" becomes two characters).
     """
     normalized = normalize_username(username)
+    if not normalized:
+        raise ValueError("username must not be empty or only whitespace")
     if len(normalized) > USERNAME_MAX_LENGTH:
         raise ValueError(f"username must be at most {USERNAME_MAX_LENGTH} characters")
     return normalized

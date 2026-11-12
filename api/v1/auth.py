@@ -82,9 +82,10 @@ async def authenticate_user(
     # Stored usernames are normalized at signup, so match that form here and
     # key the throttle on it, otherwise "Alice" and "alice" differ.
     username = normalize_username(username)
-    # Lowercasing can lengthen a string ("İ" becomes two characters), so check
-    # again: signup applies the same limit to the normalized form.
-    if len(username) > USERNAME_MAX_LENGTH:
+    # Check again after normalizing: trimming can empty a username ("   ") and
+    # lowercasing can lengthen one ("İ" becomes two characters). Signup applies
+    # the same limits to the normalized form, so no stored account matches.
+    if not username or len(username) > USERNAME_MAX_LENGTH:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     # Reserved up front so concurrent guesses cannot all pass the check; it
     # stays recorded as a failure for this client unless the login succeeds.

@@ -109,3 +109,11 @@ class TestAdminClimberUpdate:
 def test_username_length_is_checked_after_lowercasing(model):
     with pytest.raises(ValidationError):
         model(username="İ" * 200, password="secret123", firstname="A", lastname="B")
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+@pytest.mark.parametrize("username", [" ", "   ", "\t\n"])
+def test_whitespace_only_username_is_rejected(model, username):
+    """Regression: it passed min_length=1 and was stored as an empty username."""
+    with pytest.raises(ValidationError):
+        model(username=username, password="secret123", firstname="A", lastname="B")

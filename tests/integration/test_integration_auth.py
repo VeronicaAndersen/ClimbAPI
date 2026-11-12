@@ -344,6 +344,25 @@ class TestCredentialLengthLimits:
         assert resp.json() == {"detail": "Invalid credentials"}
         assert len(login_throttle._by_client) == 0
 
+    async def test_signup_rejects_whitespace_only_username(self, client):
+        resp = await signup(client, username="   ")
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("path", ["/auth/login", "/auth/token"])
+    async def test_whitespace_only_username_is_rejected_without_throttling(
+        self, client, path
+    ):
+        from security.login_throttle import login_throttle
+
+        credentials = {"username": "   ", "password": "secret123"}
+        if path == "/auth/token":
+            resp = await client.post(f"{BASE}{path}", data=credentials)
+        else:
+            resp = await client.post(f"{BASE}{path}", json=credentials)
+        assert resp.status_code == 401
+        assert resp.json() == {"detail": "Invalid credentials"}
+        assert len(login_throttle._by_client) == 0
+
     async def test_signup_rejects_username_too_long_after_lowercasing(self, client):
         resp = await signup(client, username="İ" * 200)
         assert resp.status_code == 422
