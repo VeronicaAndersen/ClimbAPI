@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.config import get_session
 from db.models import Climber, PasswordResetToken
 from schema.auth import (
+    PASSWORD_MAX_LENGTH,
+    USERNAME_MAX_LENGTH,
     TokenPair,
     LoginRequest,
     RefreshRequest,
@@ -55,6 +57,13 @@ async def authenticate_user(
     Raises 429 when this client has too many recent failed attempts on the
     username and 401 when the credentials are invalid.
     """
+    # /token takes OAuth2PasswordRequestForm, which has no length limits, so
+    # enforce the signup limits here. Checked before the throttle so oversized
+    # junk neither costs a hash nor fills the throttle's memory; no stored
+    # account can match it anyway.
+    if len(username) > USERNAME_MAX_LENGTH or len(password) > PASSWORD_MAX_LENGTH:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
     # Stored usernames are normalized at signup, so match that form here and
     # key the throttle on it, otherwise "Alice" and "alice" differ.
     username = normalize_username(username)

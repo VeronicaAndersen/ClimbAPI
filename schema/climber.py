@@ -3,7 +3,7 @@ from typing import Optional
 
 from pydantic import BaseModel, constr, field_validator
 
-from schema.auth import TokenPair
+from schema.auth import PASSWORD_MAX_LENGTH, USERNAME_MAX_LENGTH, TokenPair
 
 
 def normalize_username(username: str) -> str:
@@ -12,8 +12,8 @@ def normalize_username(username: str) -> str:
 
 
 class ClimberCreate(BaseModel):
-    username: constr(min_length=1, max_length=200)
-    password: constr(min_length=6, max_length=1024)
+    username: constr(min_length=1, max_length=USERNAME_MAX_LENGTH)
+    password: constr(min_length=6, max_length=PASSWORD_MAX_LENGTH)
     email: Optional[str] = None
     firstname: str
     lastname: str
@@ -41,8 +41,8 @@ class ClimberCreate(BaseModel):
 
 
 class ClimberUpdate(BaseModel):
-    username: Optional[constr(min_length=1, max_length=200)] = None
-    password: Optional[constr(min_length=6, max_length=1024)] = None
+    username: Optional[constr(min_length=1, max_length=USERNAME_MAX_LENGTH)] = None
+    password: Optional[constr(min_length=6, max_length=PASSWORD_MAX_LENGTH)] = None
     email: Optional[str] = None
     firstname: Optional[str] = None
     lastname: Optional[str] = None

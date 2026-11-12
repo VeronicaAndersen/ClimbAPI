@@ -291,3 +291,44 @@ class TestPasswordResetRequest:
         )
         assert resp.status_code == 200
         assert "mail" in resp.json()["message"]
+
+
+# ---------------------------------------------------------------------------
+# Input size limits on login and password reset
+# ---------------------------------------------------------------------------
+
+class TestCredentialLengthLimits:
+    async def test_login_rejects_oversized_username(self, client):
+        resp = await login(client, username="u" * 201)
+        assert resp.status_code == 422
+
+    async def test_login_rejects_oversized_password(self, client):
+        resp = await login(client, password="p" * 1025)
+        assert resp.status_code == 422
+
+    async def test_login_accepts_maximum_lengths(self, client):
+        resp = await login(client, username="u" * 200, password="p" * 1024)
+        assert resp.status_code == 401
+
+    @pytest.mark.parametrize(
+        ("username", "password"),
+        [("u" * 201, "secret123"), ("testuser", "p" * 1025)],
+    )
+    async def test_token_rejects_oversized_input_without_throttling(
+        self, client, username, password
+    ):
+        from security.login_throttle import login_throttle
+
+        resp = await client.post(
+            f"{BASE}/auth/token", data={"username": username, "password": password}
+        )
+        assert resp.status_code == 401
+        assert resp.json() == {"detail": "Invalid credentials"}
+        assert len(login_throttle._by_client) == 0
+        assert len(login_throttle._by_username) == 0
+
+    async def test_password_reset_rejects_oversized_username(self, client):
+        resp = await client.post(
+            f"{BASE}/auth/password-reset/request", json={"username": "u" * 201}
+        )
+        assert resp.status_code == 422
