@@ -61,6 +61,8 @@ _ENV_VARS = {
     "LOGIN_MAX_FAILURES": "LOGIN_MAX_FAILURES",
     "LOGIN_FAILURE_WINDOW_SECONDS": "LOGIN_FAILURE_WINDOW_SECONDS",
     "LOGIN_MAX_FAILURES_PER_USERNAME": "LOGIN_MAX_FAILURES_PER_USERNAME",
+    "LOGIN_MAX_USERNAMES_PER_CLIENT": "LOGIN_MAX_USERNAMES_PER_CLIENT",
+    "LOGIN_THROTTLE_MAX_TRACKED": "LOGIN_THROTTLE_MAX_TRACKED",
 }
 
 
@@ -80,6 +82,11 @@ class RateLimitSettings(BaseModel):
     # Failed logins per username across all IPs; past this, only IPs that
     # have failed on the username are blocked.
     LOGIN_MAX_FAILURES_PER_USERNAME: int = 50
+    # Distinct usernames a client (IPv4 address or IPv6 /64) may have recent
+    # failures on; past this it is refused new usernames.
+    LOGIN_MAX_USERNAMES_PER_CLIENT: int = 20
+    # Entries per throttle counter; memory is roughly 400 bytes per entry.
+    LOGIN_THROTTLE_MAX_TRACKED: int = 1_000_000
 
     @field_validator(
         "LOGIN", "SIGNUP", "PASSWORD_RESET_REQUEST", "PASSWORD_RESET_CONFIRM", "REFRESH"
@@ -93,7 +100,11 @@ class RateLimitSettings(BaseModel):
         return value
 
     @field_validator(
-        "LOGIN_MAX_FAILURES", "LOGIN_FAILURE_WINDOW_SECONDS", "LOGIN_MAX_FAILURES_PER_USERNAME"
+        "LOGIN_MAX_FAILURES",
+        "LOGIN_FAILURE_WINDOW_SECONDS",
+        "LOGIN_MAX_FAILURES_PER_USERNAME",
+        "LOGIN_MAX_USERNAMES_PER_CLIENT",
+        "LOGIN_THROTTLE_MAX_TRACKED",
     )
     @classmethod
     def must_be_positive(cls, value: int) -> int:

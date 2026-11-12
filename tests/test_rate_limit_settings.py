@@ -17,6 +17,8 @@ def test_defaults():
     assert settings.LOGIN_MAX_FAILURES == 5
     assert settings.LOGIN_FAILURE_WINDOW_SECONDS == 900
     assert settings.LOGIN_MAX_FAILURES_PER_USERNAME == 50
+    assert settings.LOGIN_MAX_USERNAMES_PER_CLIENT == 20
+    assert settings.LOGIN_THROTTLE_MAX_TRACKED == 1_000_000
 
 
 def test_env_overrides(monkeypatch):
@@ -37,7 +39,13 @@ def test_invalid_limit_string_rejected(monkeypatch):
 
 @pytest.mark.parametrize(
     "name",
-    ["LOGIN_MAX_FAILURES", "LOGIN_FAILURE_WINDOW_SECONDS", "LOGIN_MAX_FAILURES_PER_USERNAME"],
+    [
+        "LOGIN_MAX_FAILURES",
+        "LOGIN_FAILURE_WINDOW_SECONDS",
+        "LOGIN_MAX_FAILURES_PER_USERNAME",
+        "LOGIN_MAX_USERNAMES_PER_CLIENT",
+        "LOGIN_THROTTLE_MAX_TRACKED",
+    ],
 )
 def test_non_positive_throttle_values_rejected(monkeypatch, name):
     monkeypatch.setenv(name, "0")
