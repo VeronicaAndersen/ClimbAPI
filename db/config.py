@@ -12,6 +12,9 @@ async_engine = create_async_engine(
     max_overflow=10,
     pool_pre_ping=True,
     pool_recycle=1800,
+    # Keep bound values (usernames, tokens, other user input) out of
+    # exception messages and therefore out of error logs.
+    hide_parameters=True,
 )
 
 AsyncSessionLocal = async_sessionmaker(
