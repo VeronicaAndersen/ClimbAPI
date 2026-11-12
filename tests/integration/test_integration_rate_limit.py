@@ -8,6 +8,7 @@ signup 5/minute, and 5 failed logins per (username, client IP) in 15 minutes.
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from limits import parse_many
 
 from main import app
 from security.login_throttle import login_throttle
@@ -224,17 +225,32 @@ def _api_routes(routes):
             yield from _api_routes(getattr(nested, "routes", nested))
 
 
-def test_every_rate_limited_endpoint_is_enforced():
-    """A limit decorator only works on a RateLimitedRoute; catch a missing route_class."""
-    from security.rate_limit import RateLimitedRoute, route_limit_of
+# Every /auth route and the per-IP limit it must enforce. A new /auth route
+# fails the first test until it is added here, with or without a limit.
+EXPECTED_AUTH_LIMITS = {
+    "/auth/login": rate_limit_settings.LOGIN,
+    "/auth/token": rate_limit_settings.LOGIN,
+    "/auth/signup": rate_limit_settings.SIGNUP,
+    "/auth/password-reset/request": rate_limit_settings.PASSWORD_RESET_REQUEST,
+    "/auth/password-reset/confirm": rate_limit_settings.PASSWORD_RESET_CONFIRM,
+    "/auth/refresh": rate_limit_settings.REFRESH,
+}
 
-    limited = [r for r in _api_routes(app.routes) if route_limit_of(r.endpoint) is not None]
-    assert {r.path for r in limited} >= {
-        "/auth/login",
-        "/auth/token",
-        "/auth/signup",
-        "/auth/password-reset/request",
-        "/auth/password-reset/confirm",
-        "/auth/refresh",
-    }
-    assert all(isinstance(r, RateLimitedRoute) for r in limited)
+
+def test_auth_routes_match_expected_set():
+    auth_paths = {r.path for r in _api_routes(app.routes) if r.path.startswith("/auth/")}
+    assert auth_paths == set(EXPECTED_AUTH_LIMITS)
+
+
+@pytest.mark.parametrize("path", sorted(EXPECTED_AUTH_LIMITS))
+async def test_auth_route_enforces_its_limit(client, path):
+    """
+    Sends requests until the limit and expects a 429 after it. This checks
+    what the served route does, so a missing route_class or a limit decorator
+    placed above @router.post is caught, not just a missing tag.
+    """
+    (item,) = parse_many(EXPECTED_AUTH_LIMITS[path])
+    for _ in range(item.amount):
+        resp = await client.post(f"{BASE}{path}", json={})
+        assert resp.status_code != 429
+    assert_429(await client.post(f"{BASE}{path}", json={}))
