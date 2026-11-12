@@ -10,22 +10,27 @@ an IPv6 /64, see ``security.client_address.client_ip``):
 * per username, across all clients: once ``max_failures_per_username`` is
   reached, only clients that have themselves failed on the username are
   blocked;
+* per (username, IPv6 /48), IPv6 clients only: ``max_failures_per_prefix``
+  failures block every /64 in that /48 for the username, including fresh
+  ones. Without it, an attacker holding a /48 has 65,536 /64s and so that
+  many extra guesses once the per-username cap is reached. A success does
+  not clear it, like the per-username counter;
 * per client, distinct usernames with recent failures, only while the
   throttle is under pressure (see below): a client that has failed on
   ``max_usernames_per_client`` different usernames is then refused new
   usernames until one of them expires.
 
-An attacker can therefore lock out a username only for their own client, and a
-distributed guesser gets at most one guess per fresh client once the username
-cap is hit.
+An attacker can therefore lock out a username only for their own client (or
+their own /48, for IPv6), and a distributed guesser gets at most one guess per
+fresh client once the username cap is hit, and at most
+``max_failures_per_prefix`` per /48.
 
 An attempt is reserved as a (username, client) failure *before* the password
 check, so concurrent requests cannot slip past the limit while they wait for
 the hash. A successful login clears that counter, and a server error hands the
 reservation back (``release``), so only real failures count. The per-username
-counter is only updated once a check has failed; concurrent requests may
-overshoot it slightly, which is harmless because it never blocks a client on
-its own.
+and /48 counters are only updated once a check has failed, so a release does
+not need to touch them; concurrent requests may overshoot them slightly.
 
 Unknown usernames are tracked exactly like real ones so the throttle cannot
 be used to find out which usernames exist.
@@ -33,9 +38,11 @@ be used to find out which usernames exist.
 State lives in process memory (one uvicorn worker). The methods do not await,
 so they are safe on the single event loop without a lock.
 
-Memory is bounded by ``max_tracked`` keys per counter. Each failed login
-costs roughly 600 bytes (short usernames) to 1 KB (200-character usernames)
-across both counters, so the default of 200,000 stays around 120-200 MB.
+Memory is bounded by ``max_tracked`` keys per counter. Measured across all
+counters, a failed login costs about 550-750 bytes from IPv4 and 850 bytes to
+1.05 KB from IPv6 (which also fills the /48 counter), for short to
+200-character usernames. The default of 200,000 failures in a window is
+therefore about 110-150 MB for IPv4 traffic and at most about 210 MB.
 Expired keys are dropped as time passes, but a key that still has attempts
 inside the window is never evicted: that would reset its counter and let an
 attacker flush it by trying many other usernames. When every slot holds an
@@ -59,6 +66,7 @@ import time
 from collections.abc import Callable
 
 from schema.climber import normalize_username
+from security.client_address import ipv6_site_key
 from security.rate_limit import rate_limit_settings
 from security.rate_limited_warning import RateLimitedWarning
 from security.sliding_window import SlidingWindowLog
@@ -74,6 +82,7 @@ class LoginThrottle:
         *,
         max_failures_per_username: int,
         max_usernames_per_client: int,
+        max_failures_per_prefix: int,
         enabled: bool = True,
         max_tracked: int = 200_000,
         pressure_ratio: float = 0.1,
@@ -83,6 +92,7 @@ class LoginThrottle:
         self.max_failures = max_failures
         self.max_failures_per_username = max_failures_per_username
         self.max_usernames_per_client = max_usernames_per_client
+        self.max_failures_per_prefix = max_failures_per_prefix
         self.window_seconds = window_seconds
         self.enabled = enabled
         # Key count from which the per-client username cap applies.
@@ -101,6 +111,13 @@ class LoginThrottle:
             window_seconds,
             max_keys=max_tracked,
             max_per_key=max_failures_per_username,
+            clock=clock,
+        )
+        # (username, IPv6 /48) failures; IPv4 clients never get a key here.
+        self._by_prefix: SlidingWindowLog[tuple[str, str]] = SlidingWindowLog(
+            window_seconds,
+            max_keys=max_tracked,
+            max_per_key=max_failures_per_prefix,
             clock=clock,
         )
         # No usernames or addresses in these: the count is enough to spot an attack.
@@ -140,19 +157,25 @@ class LoginThrottle:
         self._by_client.add(client_key)
         return None
 
-    def failed(self, username: str) -> None:
+    def failed(self, username: str, client_ip: str) -> None:
         """The reserved attempt had wrong credentials."""
         if not self.enabled:
             return
-        # Refused only when the log is full of active usernames; acquire()
-        # then blocks the username until a slot frees up.
-        self._by_username.add(normalize_username(username))
+        username = normalize_username(username)
+        # These adds are refused only when a log is full of active keys;
+        # acquire() then blocks new keys until a slot frees up.
+        self._by_username.add(username)
+        site = ipv6_site_key(client_ip)
+        if site is not None:
+            self._by_prefix.add((username, site))
 
     def succeeded(self, username: str, client_ip: str) -> None:
         """
         The reserved attempt was a correct login: forget this IP's failures.
 
-        Failures from other IPs stay counted against the username.
+        Failures from other IPs stay counted against the username, and the
+        /48 counter is not cleared either: one success inside a /48 must not
+        reset the budget of every other /64 in it.
         """
         if not self.enabled:
             return
@@ -176,6 +199,7 @@ class LoginThrottle:
     def clear(self) -> None:
         self._by_client.clear()
         self._by_username.clear()
+        self._by_prefix.clear()
         self._usernames_per_client.clear()
 
     def _forget_client_key(self, key: tuple[str, str]) -> None:
@@ -191,9 +215,15 @@ class LoginThrottle:
     ) -> int | None:
         client_failures = self._by_client.recent(client_key)
         if client_failures is None:
-            return self._new_key_retry_after(username, client_ip)
-        if len(client_failures) >= self.max_failures:
-            return self._by_client.seconds_until_expiry(client_failures[0])
+            blocked = self._new_key_retry_after(username, client_ip)
+        elif len(client_failures) >= self.max_failures:
+            blocked = self._by_client.seconds_until_expiry(client_failures[0])
+        else:
+            blocked = None
+        if blocked is None:
+            blocked = self._prefix_retry_after(username, client_ip)
+        if blocked is not None or client_failures is None:
+            return blocked
 
         username_failures = self._by_username.recent(username)
         if (
@@ -209,10 +239,26 @@ class LoginThrottle:
             self._by_username.seconds_until_expiry(username_failures[excess]),
         )
 
+    def _prefix_retry_after(self, username: str, client_ip: str) -> int | None:
+        """Block every /64 in the client's /48 once it has too many failures."""
+        site = ipv6_site_key(client_ip)
+        if site is None:
+            return None
+        key = (username, site)
+        full = self._by_prefix.seconds_until_capacity(key)
+        if full is not None:
+            self._warn_full()
+            return full
+        failures = self._by_prefix.recent(key)
+        if failures is None or len(failures) < self.max_failures_per_prefix:
+            return None
+        excess = len(failures) - self.max_failures_per_prefix
+        return self._by_prefix.seconds_until_expiry(failures[excess])
+
     def _under_pressure(self) -> bool:
-        return (
-            self._by_client.active_count() >= self.pressure_threshold
-            or self._by_username.active_count() >= self.pressure_threshold
+        return any(
+            log.active_count() >= self.pressure_threshold
+            for log in (self._by_client, self._by_username, self._by_prefix)
         )
 
     def _new_key_retry_after(self, username: str, client_ip: str) -> int | None:
@@ -240,6 +286,7 @@ login_throttle = LoginThrottle(
     max_failures=rate_limit_settings.LOGIN_MAX_FAILURES,
     max_failures_per_username=rate_limit_settings.LOGIN_MAX_FAILURES_PER_USERNAME,
     max_usernames_per_client=rate_limit_settings.LOGIN_MAX_USERNAMES_PER_CLIENT,
+    max_failures_per_prefix=rate_limit_settings.LOGIN_MAX_FAILURES_PER_USERNAME_PREFIX,
     max_tracked=rate_limit_settings.LOGIN_THROTTLE_MAX_TRACKED,
     pressure_ratio=rate_limit_settings.LOGIN_THROTTLE_PRESSURE_RATIO,
     window_seconds=rate_limit_settings.LOGIN_FAILURE_WINDOW_SECONDS,

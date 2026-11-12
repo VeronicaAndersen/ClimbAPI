@@ -66,6 +66,7 @@ _ENV_VARS = {
     "LOGIN_MAX_USERNAMES_PER_CLIENT": "LOGIN_MAX_USERNAMES_PER_CLIENT",
     "LOGIN_THROTTLE_MAX_TRACKED": "LOGIN_THROTTLE_MAX_TRACKED",
     "LOGIN_THROTTLE_PRESSURE_RATIO": "LOGIN_THROTTLE_PRESSURE_RATIO",
+    "LOGIN_MAX_FAILURES_PER_USERNAME_PREFIX": "LOGIN_MAX_FAILURES_PER_USERNAME_PREFIX",
 }
 
 
@@ -85,12 +86,15 @@ class RateLimitSettings(BaseModel):
     # Failed logins per username across all IPs; past this, only IPs that
     # have failed on the username are blocked.
     LOGIN_MAX_FAILURES_PER_USERNAME: int = 50
+    # Failed logins per (username, IPv6 /48); past this every /64 in the /48
+    # is blocked for the username. IPv4 clients are not affected.
+    LOGIN_MAX_FAILURES_PER_USERNAME_PREFIX: int = 15
     # Distinct usernames a client (IPv4 address or IPv6 /64) may have recent
     # failures on; past this it is refused new usernames. Only enforced under
     # pressure, see LOGIN_THROTTLE_PRESSURE_RATIO.
     LOGIN_MAX_USERNAMES_PER_CLIENT: int = 20
-    # Entries per throttle counter. A failed login costs roughly 600 bytes to
-    # 1 KB across both counters, so 200,000 is about 120-200 MB when full.
+    # Entries per throttle counter. A failed login costs about 550 bytes to
+    # 1 KB across the counters (IPv6 at the high end), so at most ~210 MB.
     LOGIN_THROTTLE_MAX_TRACKED: int = 200_000
     # Share of LOGIN_THROTTLE_MAX_TRACKED from which the per-client username
     # cap applies. 0 enforces it always, 1 only when a counter is full.
@@ -120,6 +124,7 @@ class RateLimitSettings(BaseModel):
         "LOGIN_MAX_FAILURES_PER_USERNAME",
         "LOGIN_MAX_USERNAMES_PER_CLIENT",
         "LOGIN_THROTTLE_MAX_TRACKED",
+        "LOGIN_MAX_FAILURES_PER_USERNAME_PREFIX",
     )
     @classmethod
     def must_be_positive(cls, value: int) -> int:

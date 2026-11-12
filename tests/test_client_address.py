@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from security import client_address
-from security.client_address import client_ip, normalize_client_address
+from security.client_address import client_ip, ipv6_site_key, normalize_client_address
 from security.rate_limited_warning import RateLimitedWarning
 
 
@@ -106,3 +106,16 @@ def test_valid_addresses_do_not_warn(caplog, unknown_client_clock):
         normalize_client_address("203.0.113.7")
         normalize_client_address("2001:db8::1")
     assert caplog.records == []
+
+
+@pytest.mark.parametrize(
+    ("client_key", "expected"),
+    [
+        ("2001:db8:aa:1::/64", "2001:db8:aa::/48"),
+        ("2001:db8:aa:ffff::/64", "2001:db8:aa::/48"),
+        ("203.0.113.7", None),
+        ("unknown", None),
+    ],
+)
+def test_ipv6_site_key(client_key, expected):
+    assert ipv6_site_key(client_key) == expected

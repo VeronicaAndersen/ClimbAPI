@@ -25,6 +25,9 @@ _warn_unknown_client = RateLimitedWarning(
 # One IPv6 customer usually gets at least a /64, so rotating addresses inside
 # it must not give a fresh budget.
 _IPV6_CLIENT_PREFIX = 64
+# Coarser grouping for the login throttle: a site or small business commonly
+# gets a /48, i.e. 65,536 /64s.
+_IPV6_SITE_PREFIX = 48
 
 # IPv6 forms that carry an IPv4 address in the low 32 bits. A client reaching
 # us through them is that IPv4 client and must share its budget.
@@ -81,3 +84,19 @@ def client_ip(request: Request) -> str:
     """
     host = request.client.host if request.client is not None else None
     return normalize_client_address(host)
+
+
+def ipv6_site_key(client_key: str) -> str | None:
+    """
+    The /48 network around an IPv6 client key, or None for IPv4 and unknown.
+
+    Takes the output of ``normalize_client_address``; IPv6 forms that embed
+    IPv4 were already mapped to IPv4 there and so get None.
+    """
+    try:
+        network = ipaddress.ip_network(client_key)
+    except ValueError:
+        return None
+    if not isinstance(network, ipaddress.IPv6Network):
+        return None
+    return str(network.supernet(new_prefix=_IPV6_SITE_PREFIX))

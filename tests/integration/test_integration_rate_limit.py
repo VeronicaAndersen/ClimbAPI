@@ -108,6 +108,23 @@ class TestLoginIpRateLimit:
             assert_429(await login(c))
 
 
+    async def test_ipv6_48_caps_guesses_across_its_64s(self, client):
+        """Regression: each fresh /64 in a /48 got its own guesses."""
+        await signup(client)
+        cap = rate_limit_settings.LOGIN_MAX_FAILURES_PER_USERNAME_PREFIX
+        for i in range(cap):
+            transport = ASGITransport(app=app, client=(f"2001:db8:ab:{i + 1:x}::1", 40000))
+            async with AsyncClient(transport=transport, base_url="http://test") as c:
+                assert (await login(c, password="wrongpassword")).status_code == 401
+        transport = ASGITransport(app=app, client=("2001:db8:ab:ffff::1", 40000))
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            assert_429(await login(c))
+        # Another /48 is not affected.
+        transport = ASGITransport(app=app, client=("2001:db8:cd:1::1", 40000))
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            assert (await login(c)).status_code == 200
+
+
 class TestSignupRateLimit:
     async def test_signup_returns_429_after_limit(self, client):
         for i in range(5):

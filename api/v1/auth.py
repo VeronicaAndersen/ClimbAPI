@@ -106,7 +106,7 @@ async def authenticate_user(
         login_throttle.release(username, client_address)
         raise
     if user is None:
-        login_throttle.failed(username)
+        login_throttle.failed(username, client_address)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     login_throttle.succeeded(username, client_address)

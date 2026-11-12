@@ -16,13 +16,16 @@ class FakeClock:
         return self.now
 
 
-def make(max_failures=3, window=60.0, *, per_username=10, per_client=1000, **kwargs):
+def make(
+    max_failures=3, window=60.0, *, per_username=10, per_client=1000, per_prefix=6, **kwargs
+):
     clock = FakeClock()
     throttle = LoginThrottle(
         max_failures,
         window,
         max_failures_per_username=per_username,
         max_usernames_per_client=per_client,
+        max_failures_per_prefix=per_prefix,
         clock=clock,
         **kwargs,
     )
@@ -33,7 +36,7 @@ def fail(throttle, username="alice", ip=IP, times=1):
     """Failed attempts, as the login endpoint reports them."""
     for _ in range(times):
         assert throttle.acquire(username, ip) is None
-        throttle.failed(username)
+        throttle.failed(username, ip)
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +229,102 @@ def test_username_cap_retry_after_is_earliest_release():
 
 
 # ---------------------------------------------------------------------------
+# Per (username, IPv6 /48)
+# ---------------------------------------------------------------------------
+
+def _slash64(i: int, site: str = "2001:db8:aa") -> str:
+    """Client key for the i-th /64 inside the given /48."""
+    return f"{site}:{i:x}::/64"
+
+
+def test_many_64s_in_one_48_are_capped():
+    """
+    Regression: past the per-username cap each fresh /64 got a guess, so a
+    /48 gave 65,536 guesses per window.
+    """
+    throttle, _ = make(max_failures=3, per_username=1000, per_prefix=6)
+    for i in range(6):
+        fail(throttle, ip=_slash64(i))
+    assert throttle.acquire("alice", _slash64(6)) is not None
+    assert throttle.acquire("alice", _slash64(500)) is not None
+    assert len(throttle._by_client) == 6
+
+
+def test_48_cap_blocks_correct_password_too_and_reports_expiry():
+    throttle, clock = make(window=60.0, per_prefix=2)
+    fail(throttle, ip=_slash64(1))
+    clock.now += 10
+    fail(throttle, ip=_slash64(2))
+    clock.now += 10
+    assert throttle.acquire("alice", _slash64(3)) == 40
+
+
+def test_48_cap_is_per_username_and_per_48():
+    throttle, _ = make(per_prefix=2)
+    fail(throttle, ip=_slash64(1))
+    fail(throttle, ip=_slash64(2))
+    assert throttle.acquire("bob", _slash64(3)) is None
+    assert throttle.acquire("alice", _slash64(3, site="2001:db8:bb")) is None
+    assert throttle.acquire("alice", IP) is None
+
+
+def test_48_counter_ignores_ipv4_clients():
+    throttle, _ = make(max_failures=100, per_username=1000, per_prefix=2)
+    fail(throttle, times=10)
+    assert len(throttle._by_prefix) == 0
+    assert throttle.acquire("alice", IP) is None
+
+
+def test_48_counter_counts_failures_only():
+    throttle, _ = make(per_prefix=2)
+    for i in range(5):
+        assert throttle.acquire("alice", _slash64(i)) is None
+        throttle.succeeded("alice", _slash64(i))
+    assert throttle.acquire("alice", _slash64(9)) is None
+    assert throttle.acquire("bob", _slash64(1)) is None
+    throttle.release("bob", _slash64(1))
+    assert len(throttle._by_prefix) == 0
+
+
+def test_success_does_not_clear_48_counter():
+    throttle, _ = make(per_prefix=2)
+    fail(throttle, ip=_slash64(1))
+    assert throttle.acquire("alice", _slash64(2)) is None
+    throttle.succeeded("alice", _slash64(2))
+    fail(throttle, ip=_slash64(3))
+    assert throttle.acquire("alice", _slash64(4)) is not None
+
+
+def test_48_counter_expires_with_window():
+    throttle, clock = make(window=60.0, per_prefix=2)
+    fail(throttle, ip=_slash64(1))
+    fail(throttle, ip=_slash64(2))
+    clock.now += 61
+    assert throttle.acquire("alice", _slash64(3)) is None
+
+
+def test_48_counter_respects_max_tracked():
+    throttle, _ = make(max_failures=100, per_prefix=100, max_tracked=2)
+    fail(throttle, username="a", ip=_slash64(1, site="2001:db8:1"))
+    fail(throttle, username="a", ip=_slash64(1, site="2001:db8:2"))
+    # The /48 log is full of active keys, so a new (username, /48) is refused.
+    assert throttle.acquire("a", _slash64(1, site="2001:db8:3")) is not None
+    assert len(throttle._by_prefix) == 2
+
+
+def test_48_counter_counts_toward_pressure():
+    throttle, _ = make(per_prefix=100, max_tracked=10, pressure_ratio=0.5)
+    for i in range(5):
+        fail(throttle, username=f"u{i}", ip=_slash64(i))
+    # Leave only the /48 counter populated to see that it is consulted.
+    throttle._by_client.clear()
+    throttle._usernames_per_client.clear()
+    throttle._by_username.clear()
+    assert throttle._by_prefix.active_count() == 5
+    assert throttle._under_pressure()
+
+
+# ---------------------------------------------------------------------------
 # Bounded memory
 # ---------------------------------------------------------------------------
 
@@ -356,7 +455,7 @@ def test_junk_usernames_from_one_client_cannot_block_user_on_clean_ip():
     throttle, _ = make(per_client=20, max_tracked=100)
     for i in range(1000):
         if throttle.acquire(f"junk{i}", "203.0.113.66") is None:
-            throttle.failed(f"junk{i}")
+            throttle.failed(f"junk{i}", "203.0.113.66")
     assert len(throttle._by_client) == 20
     assert throttle.acquire("alice", IP) is None
 
