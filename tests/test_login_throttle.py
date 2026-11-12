@@ -300,6 +300,38 @@ def test_many_64s_in_one_48_are_capped():
     assert len(throttle._by_client) == 6
 
 
+def test_concurrent_burst_from_one_48_is_capped():
+    """
+    Regression: the /48 counter was only written in failed(), after the
+    hash, so concurrent requests from many /64s all passed the check
+    (200 of 200 in the PoC, against a cap of 15).
+    """
+    throttle, _ = make(max_failures=5, per_username=1000, per_prefix=15)
+    results = [throttle.acquire("alice", _slash64(i)) for i in range(200)]
+    assert results[:15] == [None] * 15
+    assert all(r is not None for r in results[15:])
+
+
+def test_release_hands_back_48_reservation():
+    throttle, _ = make(per_prefix=2)
+    for i in range(5):
+        assert throttle.acquire("alice", _slash64(i)) is None
+        throttle.release("alice", _slash64(i))
+    assert len(throttle._by_prefix) == 0
+
+
+def test_success_withdraws_only_its_own_48_reservation():
+    throttle, _ = make(per_prefix=3)
+    fail(throttle, ip=_slash64(1))
+    fail(throttle, ip=_slash64(2))
+    assert throttle.acquire("alice", _slash64(3)) is None
+    throttle.succeeded("alice", _slash64(3))
+    # The two real failures still count; one more fills the cap.
+    assert len(throttle._by_prefix.recent(("alice", "2001:db8:aa::/48"))) == 2
+    fail(throttle, ip=_slash64(4))
+    assert throttle.acquire("alice", _slash64(5)) is not None
+
+
 def test_48_cap_blocks_correct_password_too_and_reports_expiry():
     throttle, clock = make(window=60.0, per_prefix=2)
     fail(throttle, ip=_slash64(1))
@@ -331,6 +363,7 @@ def test_48_counter_counts_failures_only():
         assert throttle.acquire("alice", _slash64(i)) is None
         throttle.succeeded("alice", _slash64(i))
     assert throttle.acquire("alice", _slash64(9)) is None
+    throttle.succeeded("alice", _slash64(9))
     assert throttle.acquire("bob", _slash64(1)) is None
     throttle.release("bob", _slash64(1))
     assert len(throttle._by_prefix) == 0

@@ -25,12 +25,16 @@ their own /48, for IPv6), and a distributed guesser gets at most one guess per
 fresh client once the username cap is hit, and at most
 ``max_failures_per_prefix`` per /48.
 
-An attempt is reserved as a (username, client) failure *before* the password
-check, so concurrent requests cannot slip past the limit while they wait for
-the hash. A successful login clears that counter, and a server error hands the
-reservation back (``release``), so only real failures count. The per-username
-and /48 counters are only updated once a check has failed, so a release does
-not need to touch them; concurrent requests may overshoot them slightly.
+An attempt is reserved as a failure in the (username, client) and, for IPv6,
+the (username, /48) counters *before* the password check, so a burst of
+concurrent requests cannot slip past those limits while the hashes run. A
+successful login clears the (username, client) counter and withdraws its /48
+reservation (the oldest /48 timestamp is dropped, so earlier failures are not
+cleared and the /48 count can only expire later than exact, never earlier). A
+server error hands both reservations back (``release``), so only real
+failures count. The per-username counter is still only updated once a check
+has failed, so a concurrent burst may overshoot it; that is harmless because
+it never blocks a client on its own, but it means that cap is approximate.
 
 Unknown usernames are tracked exactly like real ones so the throttle cannot
 be used to find out which usernames exist.
@@ -153,19 +157,21 @@ class LoginThrottle:
             return retry_after
         # Cannot fail: _retry_after checked capacity and nothing awaited since.
         self._by_client.add(client_key)
+        site = ipv6_site_key(client_ip)
+        if site is not None:
+            # Reserved now, not in failed(): otherwise a burst from many /64s
+            # would all pass the /48 check while their hashes run.
+            self._by_prefix.add((username, site))
         return None
 
     def failed(self, username: str, client_ip: str) -> None:
         """The reserved attempt had wrong credentials."""
         if not self.enabled:
             return
-        username = normalize_username(username)
-        # These adds are refused only when a log is full of active keys;
-        # acquire() then blocks new keys until a slot frees up.
-        self._by_username.add(username)
-        site = ipv6_site_key(client_ip)
-        if site is not None:
-            self._by_prefix.add((username, site))
+        # Refused only when the log is full of active usernames; acquire()
+        # then blocks new usernames until a slot frees up. The (username,
+        # client) and /48 failures were already reserved in acquire().
+        self._by_username.add(normalize_username(username))
 
     def succeeded(self, username: str, client_ip: str) -> None:
         """
@@ -173,14 +179,17 @@ class LoginThrottle:
 
         Failures from other IPs stay counted against the username, and the
         /48 counter is not cleared either: one success inside a /48 must not
-        reset the budget of every other /64 in it.
+        reset the budget of every other /64 in it. Only this attempt's /48
+        reservation is withdrawn.
         """
         if not self.enabled:
             return
+        username = normalize_username(username)
         # Intended: drop the whole (username, client) key, not just this
         # reservation. Proving the password resets that client's failure count
         # for the username, as a lockout counter normally does.
-        self._by_client.discard((normalize_username(username), client_ip))
+        self._by_client.discard((username, client_ip))
+        self._withdraw_prefix_reservation(username, client_ip)
 
     def release(self, username: str, client_ip: str) -> None:
         """
@@ -192,7 +201,14 @@ class LoginThrottle:
         """
         if not self.enabled:
             return
-        self._by_client.withdraw_one((normalize_username(username), client_ip))
+        username = normalize_username(username)
+        self._by_client.withdraw_one((username, client_ip))
+        self._withdraw_prefix_reservation(username, client_ip)
+
+    def _withdraw_prefix_reservation(self, username: str, client_ip: str) -> None:
+        site = ipv6_site_key(client_ip)
+        if site is not None:
+            self._by_prefix.withdraw_one((username, site))
 
     def clear(self) -> None:
         self._by_client.clear()
