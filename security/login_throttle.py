@@ -98,13 +98,15 @@ class LoginThrottle:
         # Key count from which the per-client username cap applies.
         self.pressure_threshold = math.ceil(pressure_ratio * max_tracked)
         # Active (username, client) keys per client. Kept in step with
-        # _by_client through its on_remove hook, so it costs one int per client.
+        # _by_client through its on_add/on_remove hooks, so it costs one int
+        # per client and cannot drift if a key expires mid-call.
         self._usernames_per_client: dict[str, int] = {}
         self._by_client: SlidingWindowLog[tuple[str, str]] = SlidingWindowLog(
             window_seconds,
             max_keys=max_tracked,
             max_per_key=max_failures,
             clock=clock,
+            on_add=self._count_client_key,
             on_remove=self._forget_client_key,
         )
         self._by_username: SlidingWindowLog[str] = SlidingWindowLog(
@@ -149,10 +151,6 @@ class LoginThrottle:
         retry_after = self._retry_after(username, client_ip, client_key)
         if retry_after is not None:
             return retry_after
-        if client_key not in self._by_client:
-            self._usernames_per_client[client_ip] = (
-                self._usernames_per_client.get(client_ip, 0) + 1
-            )
         # Cannot fail: _retry_after checked capacity and nothing awaited since.
         self._by_client.add(client_key)
         return None
@@ -201,6 +199,10 @@ class LoginThrottle:
         self._by_username.clear()
         self._by_prefix.clear()
         self._usernames_per_client.clear()
+
+    def _count_client_key(self, key: tuple[str, str]) -> None:
+        client_ip = key[1]
+        self._usernames_per_client[client_ip] = self._usernames_per_client.get(client_ip, 0) + 1
 
     def _forget_client_key(self, key: tuple[str, str]) -> None:
         client_ip = key[1]

@@ -25,12 +25,14 @@ class SlidingWindowLog[K: Hashable]:
         max_keys: int,
         max_per_key: int,
         clock: Callable[[], float],
+        on_add: Callable[[K], None] | None = None,
         on_remove: Callable[[K], None] | None = None,
     ) -> None:
         self.window_seconds = window_seconds
         self.max_keys = max_keys
         self.max_per_key = max_per_key
         self._clock = clock
+        self._on_add = on_add
         self._on_remove = on_remove
         self._entries: OrderedDict[K, list[float]] = OrderedDict()
 
@@ -100,6 +102,8 @@ class SlidingWindowLog[K: Hashable]:
             if self.is_full():
                 return False
             timestamps = self._entries[key] = []
+            if self._on_add is not None:
+                self._on_add(key)
         else:
             self._entries.move_to_end(key)
         timestamps.append(self._clock())

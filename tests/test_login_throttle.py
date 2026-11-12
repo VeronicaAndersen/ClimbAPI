@@ -188,6 +188,41 @@ def test_release_after_old_failure_expired_frees_the_client_slot():
     assert throttle._usernames_per_client == {}
 
 
+class TickingClock:
+    """Advances a little on every read, like a real clock during one call."""
+
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        self.now += 0.1
+        return self.now
+
+
+def test_client_count_stays_exact_when_key_expires_during_acquire():
+    """
+    Regression: acquire() decided "known key" before add(), so a key that
+    expired in between was re-created without being counted, and the
+    per-client username count drifted below the real number of keys.
+    """
+    for offset in range(40):
+        clock = TickingClock(1000.0)
+        throttle = LoginThrottle(
+            3,
+            60.0,
+            max_failures_per_username=10,
+            max_usernames_per_client=1000,
+            max_failures_per_prefix=6,
+            clock=clock,
+        )
+        assert throttle.acquire("alice", IP) is None
+        throttle.failed("alice", IP)
+        clock.now += 60.0 - offset * 0.1  # land the expiry inside acquire()
+        assert throttle.acquire("alice", IP) is None
+        keys = sum(1 for key in throttle._by_client._entries if key[1] == IP)
+        assert throttle._usernames_per_client.get(IP, 0) == keys, offset
+
+
 def test_release_without_reservation_is_a_no_op():
     throttle, _ = make()
     throttle.release("alice", IP)

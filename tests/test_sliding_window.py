@@ -81,3 +81,16 @@ def test_withdraw_one_on_fully_expired_key_removes_it_once():
     log.withdraw_one("a")
     assert "a" not in log
     assert removed == ["a"]
+
+
+def test_on_add_called_once_per_new_key():
+    added: list[str] = []
+    clock = FakeClock()
+    log: SlidingWindowLog[str] = SlidingWindowLog(
+        60.0, max_keys=10, max_per_key=5, clock=clock, on_add=added.append
+    )
+    log.add("a")
+    log.add("a")
+    clock.now += 61
+    log.add("a")  # expired, so created again
+    assert added == ["a", "a"]
