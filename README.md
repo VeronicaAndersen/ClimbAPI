@@ -76,11 +76,11 @@ The throttle keeps at most `LOGIN_THROTTLE_MAX_TRACKED` entries and never forget
 
 Counters are kept in memory, which works because the container runs a single uvicorn worker. With several workers or replicas, each process counts on its own; move the storage to Redis before scaling out.
 
-**Behind a reverse proxy** the limiter must see the real client IP. The app uses the connection address and does not read `X-Forwarded-For` itself, because clients can forge it. The Docker image runs uvicorn with `--proxy-headers` and trusts those headers only from the addresses in `FORWARDED_ALLOW_IPS`:
+**Behind a reverse proxy** the limiter must see the real client IP. The app uses the connection address and does not read `X-Forwarded-For` itself, because clients can forge it. The Docker image runs uvicorn with `--proxy-headers` and trusts those headers only from the addresses in `FORWARDED_ALLOW_IPS` (uvicorn reads this variable itself; the image passes it explicitly):
 
 | Environment variable | Default | Meaning |
 |---|---|---|
-| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Comma-separated IPs or CIDR ranges of your reverse proxy, for example `10.0.0.0/8` |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1,::1` | Comma-separated IPs or CIDR ranges of your reverse proxy, for example `10.0.0.0/8` |
 
 Set it to your proxy's address or network. Do not use `*` unless the container can only be reached through the proxy, because any client could then forge its IP. Outside Docker, pass the same flags yourself:
 
