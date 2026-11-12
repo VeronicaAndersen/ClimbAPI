@@ -282,6 +282,9 @@ class LoginThrottle:
         """
         if not self.enabled:
             return
+        # Intended: drop the whole (username, client) key, not just this
+        # reservation. Proving the password resets that client's failure count
+        # for the username, as a lockout counter normally does.
         self._by_client.discard((normalize_username(username), client_ip))
 
     def release(self, username: str, client_ip: str) -> None:
