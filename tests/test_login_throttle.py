@@ -110,6 +110,29 @@ def test_disabled_never_blocks():
     fail(throttle, times=10)
 
 
+def test_release_withdraws_only_the_newest_reservation():
+    throttle, _ = make()
+    fail(throttle, times=2)
+    assert throttle.acquire("alice", IP) is None
+    throttle.release("alice", IP)
+    # Two failures remain, so one more attempt is allowed before the block.
+    fail(throttle)
+    assert throttle.acquire("alice", IP) is not None
+
+
+def test_release_of_only_reservation_forgets_the_key():
+    throttle, _ = make()
+    assert throttle.acquire("alice", IP) is None
+    throttle.release("alice", IP)
+    assert len(throttle._by_client) == 0
+
+
+def test_release_without_reservation_is_a_no_op():
+    throttle, _ = make()
+    throttle.release("alice", IP)
+    assert len(throttle._by_client) == 0
+
+
 # ---------------------------------------------------------------------------
 # Per-username cap across IPs
 # ---------------------------------------------------------------------------

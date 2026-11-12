@@ -48,6 +48,21 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 router = APIRouter(prefix="/auth", tags=["auth"], route_class=RateLimitedRoute)
 
 
+async def _check_credentials(
+    session: AsyncSession, username: str, password: str
+) -> Climber | None:
+    """The user if the password matches, else None."""
+    user = await session.scalar(select(Climber).where(Climber.username == username))
+    if user is None:
+        # Do the same hashing work as for a real user so response timing does
+        # not reveal whether the username exists.
+        await verify_dummy_password_async(password)
+        return None
+    if not await verify_password_async(password, user.password):
+        return None
+    return user
+
+
 async def authenticate_user(
     session: AsyncSession, username: str, password: str, client_address: str
 ) -> Climber:
@@ -77,14 +92,16 @@ async def authenticate_user(
             headers={"Retry-After": str(retry_after)},
         )
 
-    user = await session.scalar(select(Climber).where(Climber.username == username))
+    try:
+        user = await _check_credentials(session, username, password)
+    except Exception:
+        # A database or hashing error is not a failed guess, so hand back this
+        # request's reservation. asyncio.CancelledError is a BaseException and
+        # deliberately not caught: a cancelled attempt stays counted, which
+        # errs on the safe side.
+        login_throttle.release(username, client_address)
+        raise
     if user is None:
-        # Do the same hashing work as for a real user so response timing does
-        # not reveal whether the username exists.
-        await verify_dummy_password_async(password)
-        login_throttle.failed(username)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    if not await verify_password_async(password, user.password):
         login_throttle.failed(username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 

@@ -121,6 +121,21 @@ class SlidingWindowLog[K: Hashable]:
     def discard(self, key: K) -> None:
         self._entries.pop(key, None)
 
+    def remove_latest(self, key: K) -> None:
+        """
+        Withdraw the newest timestamp for ``key``.
+
+        The key keeps its place in the expiry order even though its latest
+        timestamp may now be older. That only delays dropping it; the counts
+        from ``recent`` stay exact.
+        """
+        timestamps = self._entries.get(key)
+        if timestamps is None:
+            return
+        timestamps.pop()
+        if not timestamps:
+            del self._entries[key]
+
     def clear(self) -> None:
         self._entries.clear()
 
@@ -192,6 +207,18 @@ class LoginThrottle:
         if not self.enabled:
             return
         self._by_client.discard((normalize_username(username), client_ip))
+
+    def release(self, username: str, client_ip: str) -> None:
+        """
+        Hand back a reservation whose password check never completed.
+
+        For server-side errors (database, hashing): they say nothing about the
+        credentials, so they must not count as a failure. Only the newest
+        reservation is withdrawn; earlier failures stay.
+        """
+        if not self.enabled:
+            return
+        self._by_client.remove_latest((normalize_username(username), client_ip))
 
     def clear(self) -> None:
         self._by_client.clear()
