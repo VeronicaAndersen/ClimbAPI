@@ -325,6 +325,56 @@ def test_48_counter_counts_toward_pressure():
 
 
 # ---------------------------------------------------------------------------
+# Several limits at once: Retry-After covers all of them
+# ---------------------------------------------------------------------------
+
+def test_retry_after_covers_own_limit_and_username_cap():
+    """
+    Regression: only the client's own limit was reported (50 s); after
+    waiting that long the per-username cap still refused it.
+    """
+    throttle, clock = make(max_failures=5, window=100.0, per_username=6, per_prefix=15)
+    for i in range(5):
+        clock.now = 1000 + i * 10
+        fail(throttle, ip="10.0.0.1")
+    clock.now = 1045
+    for j in range(3):
+        fail(throttle, ip=f"10.0.1.{j}")
+
+    clock.now = 1050
+    wait = throttle.acquire("alice", "10.0.0.1")
+    assert wait == 70
+    clock.now = 1050 + wait - 1
+    assert throttle.acquire("alice", "10.0.0.1") is not None
+    clock.now = 1050 + wait
+    assert throttle.acquire("alice", "10.0.0.1") is None
+
+
+def test_retry_after_covers_full_table_and_48_cap():
+    """
+    Regression: a fresh /64 got the table-full wait (40 s) and the /48 cap
+    was never checked, so it was refused again after waiting.
+    """
+    throttle, clock = make(
+        max_failures=5, window=100.0, per_username=50, per_prefix=15, max_tracked=20
+    )
+    for i in range(5):
+        fail(throttle, username="x", ip=f"10.9.9.{i}")
+    clock.now = 1040
+    for i in range(15):
+        fail(throttle, username="bob", ip=f"2001:db8:1:{i + 2:x}::/64")
+
+    clock.now = 1060
+    fresh = "2001:db8:1:ff::/64"
+    wait = throttle.acquire("bob", fresh)
+    assert wait == 80
+    clock.now = 1060 + wait - 1
+    assert throttle.acquire("bob", fresh) is not None
+    clock.now = 1060 + wait
+    assert throttle.acquire("bob", fresh) is None
+
+
+# ---------------------------------------------------------------------------
 # Bounded memory
 # ---------------------------------------------------------------------------
 

@@ -213,47 +213,61 @@ class LoginThrottle:
     def _retry_after(
         self, username: str, client_ip: str, client_key: tuple[str, str]
     ) -> int | None:
+        """
+        Seconds until every limit that blocks this attempt has cleared.
+
+        Each limit is checked on its own and the longest wait wins, so a
+        client that retries after Retry-After is not refused again by a
+        second limit that was hidden behind the first.
+        """
         client_failures = self._by_client.recent(client_key)
         if client_failures is None:
-            blocked = self._new_key_retry_after(username, client_ip)
-        elif len(client_failures) >= self.max_failures:
-            blocked = self._by_client.seconds_until_expiry(client_failures[0])
+            waits = self._new_key_waits(username, client_ip)
         else:
-            blocked = None
-        if blocked is None:
-            blocked = self._prefix_retry_after(username, client_ip)
-        if blocked is not None or client_failures is None:
-            return blocked
+            waits = self._known_key_waits(username, client_failures)
+        waits.extend(self._prefix_waits(username, client_ip))
+        return max(waits) if waits else None
+
+    def _known_key_waits(self, username: str, client_failures: list[float]) -> list[int]:
+        """Limits for a (username, client) pair that has recent failures."""
+        waits: list[int] = []
+        if len(client_failures) >= self.max_failures:
+            excess = len(client_failures) - self.max_failures
+            waits.append(self._by_client.seconds_until_expiry(client_failures[excess]))
 
         username_failures = self._by_username.recent(username)
         if (
-            username_failures is None
-            or len(username_failures) < self.max_failures_per_username
+            username_failures is not None
+            and len(username_failures) >= self.max_failures_per_username
         ):
-            return None
-        # Blocked until this IP's failures expire or the username drops below
-        # its cap, whichever comes first.
-        excess = len(username_failures) - self.max_failures_per_username
-        return min(
-            self._by_client.seconds_until_expiry(client_failures[-1]),
-            self._by_username.seconds_until_expiry(username_failures[excess]),
-        )
+            # Lifted when this client's failures expire (it is then a fresh
+            # client, which this cap does not block) or the username drops
+            # below its cap, whichever comes first.
+            excess = len(username_failures) - self.max_failures_per_username
+            waits.append(
+                min(
+                    self._by_client.seconds_until_expiry(client_failures[-1]),
+                    self._by_username.seconds_until_expiry(username_failures[excess]),
+                )
+            )
+        return waits
 
-    def _prefix_retry_after(self, username: str, client_ip: str) -> int | None:
+    def _prefix_waits(self, username: str, client_ip: str) -> list[int]:
         """Block every /64 in the client's /48 once it has too many failures."""
         site = ipv6_site_key(client_ip)
         if site is None:
-            return None
+            return []
         key = (username, site)
+        waits: list[int] = []
         full = self._by_prefix.seconds_until_capacity(key)
         if full is not None:
             self._warn_full()
-            return full
+            waits.append(full)
         failures = self._by_prefix.recent(key)
-        if failures is None or len(failures) < self.max_failures_per_prefix:
-            return None
-        excess = len(failures) - self.max_failures_per_prefix
-        return self._by_prefix.seconds_until_expiry(failures[excess])
+        if failures is not None and len(failures) >= self.max_failures_per_prefix:
+            excess = len(failures) - self.max_failures_per_prefix
+            waits.append(self._by_prefix.seconds_until_expiry(failures[excess]))
+        return waits
 
     def _under_pressure(self) -> bool:
         return any(
@@ -261,8 +275,9 @@ class LoginThrottle:
             for log in (self._by_client, self._by_username, self._by_prefix)
         )
 
-    def _new_key_retry_after(self, username: str, client_ip: str) -> int | None:
-        """Checks for a (username, client) pair with no recent failures."""
+    def _new_key_waits(self, username: str, client_ip: str) -> list[int]:
+        """Limits for a (username, client) pair with no recent failures."""
+        waits: list[int] = []
         if (
             self._usernames_per_client.get(client_ip, 0) >= self.max_usernames_per_client
             and self._under_pressure()
@@ -271,15 +286,19 @@ class LoginThrottle:
             # Which of the client's keys expires first is not tracked (that
             # would need a per-client ordered index, about doubling memory),
             # so the window is used as an upper bound.
-            return max(1, math.ceil(self.window_seconds))
-        for full in (
-            self._by_client.seconds_until_capacity((username, client_ip)),
-            self._by_username.seconds_until_capacity(username),
-        ):
-            if full is not None:
-                self._warn_full()
-                return full
-        return None
+            waits.append(max(1, math.ceil(self.window_seconds)))
+        capacity = [
+            wait
+            for wait in (
+                self._by_client.seconds_until_capacity((username, client_ip)),
+                self._by_username.seconds_until_capacity(username),
+            )
+            if wait is not None
+        ]
+        if capacity:
+            self._warn_full()
+            waits.extend(capacity)
+        return waits
 
 
 login_throttle = LoginThrottle(
