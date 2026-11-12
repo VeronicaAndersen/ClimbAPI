@@ -88,6 +88,6 @@ Set it to your proxy's address or network. Do not use `*` unless the container c
 python -m uvicorn main:app --host 0.0.0.0 --port 8080 --proxy-headers --forwarded-allow-ips="<proxy-ip>"
 ```
 
-Without this, every request appears to come from the proxy and all clients share one budget.
+Without this, every request appears to come from the proxy and all clients share one budget. If the app sees a missing or non-IP client address, it uses one shared `unknown` key for all such clients and logs a warning (at most once a minute, without the address).
 
 Password hashing (Argon2) runs on a small dedicated thread pool so it does not block the event loop. `ARGON2_MAX_CONCURRENCY` (default `4`) caps parallel hashes, and with it peak memory (each hash uses `ARGON2_MEMORY_KIB`, default 64 MiB).

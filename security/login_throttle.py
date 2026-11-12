@@ -52,30 +52,10 @@ from collections.abc import Callable
 
 from schema.climber import normalize_username
 from security.rate_limit import rate_limit_settings
+from security.rate_limited_warning import RateLimitedWarning
 from security.sliding_window import SlidingWindowLog
 
 logger = logging.getLogger(__name__)
-
-
-class _ThrottledWarning:
-    """Log a warning at most once per interval, with how often it was hit."""
-
-    def __init__(self, message: str, *, interval_seconds: float, clock: Callable[[], float]):
-        self._message = message
-        self._interval = interval_seconds
-        self._clock = clock
-        self._last: float | None = None
-        self._suppressed = 0
-
-    def __call__(self) -> None:
-        now = self._clock()
-        self._suppressed += 1
-        if self._last is not None and now - self._last < self._interval:
-            return
-        # No usernames or addresses: the count is enough to spot an attack.
-        logger.warning("%s (%d time(s) since the last warning)", self._message, self._suppressed)
-        self._last = now
-        self._suppressed = 0
 
 
 class LoginThrottle:
@@ -112,12 +92,15 @@ class LoginThrottle:
             max_per_key=max_failures_per_username,
             clock=clock,
         )
-        self._warn_full = _ThrottledWarning(
+        # No usernames or addresses in these: the count is enough to spot an attack.
+        self._warn_full = RateLimitedWarning(
+            logger,
             "Login throttle is full of active entries; refusing new usernames",
             interval_seconds=warning_interval_seconds,
             clock=clock,
         )
-        self._warn_client_cap = _ThrottledWarning(
+        self._warn_client_cap = RateLimitedWarning(
+            logger,
             "Login throttle refused a client over its distinct-username cap",
             interval_seconds=warning_interval_seconds,
             clock=clock,

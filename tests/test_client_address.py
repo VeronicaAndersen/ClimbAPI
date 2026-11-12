@@ -1,10 +1,21 @@
 """Unit tests for client address normalization in security/rate_limit.py"""
 
+import logging
 from types import SimpleNamespace
 
 import pytest
 
+from security import rate_limit
 from security.rate_limit import client_ip, normalize_client_address
+from security.rate_limited_warning import RateLimitedWarning
+
+
+class FakeClock:
+    def __init__(self, now: float = 1000.0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
 
 
 @pytest.mark.parametrize(
@@ -44,3 +55,38 @@ def test_client_ip_without_client():
 def test_client_ip_uses_connection_host():
     request = SimpleNamespace(client=SimpleNamespace(host="2001:db8::5", port=1))
     assert client_ip(request) == "2001:db8::/64"
+
+
+@pytest.fixture()
+def unknown_client_clock(monkeypatch):
+    clock = FakeClock()
+    warning = RateLimitedWarning(
+        rate_limit.logger,
+        "Client address missing or not an IP address",
+        interval_seconds=60.0,
+        clock=clock,
+    )
+    monkeypatch.setattr(rate_limit, "_warn_unknown_client", warning)
+    return clock
+
+
+def test_unparsable_address_logs_rate_limited_warning(caplog, unknown_client_clock):
+    with caplog.at_level(logging.WARNING, logger="security.rate_limit"):
+        for _ in range(50):
+            normalize_client_address("proxy-sock")
+        normalize_client_address(None)
+        assert len(caplog.records) == 1
+        unknown_client_clock.now += 60
+        normalize_client_address("still-bad")
+    assert len(caplog.records) == 2
+    assert "51 time(s)" in caplog.records[1].getMessage()
+    for record in caplog.records:
+        assert "proxy-sock" not in record.getMessage()
+        assert "still-bad" not in record.getMessage()
+
+
+def test_valid_addresses_do_not_warn(caplog, unknown_client_clock):
+    with caplog.at_level(logging.WARNING, logger="security.rate_limit"):
+        normalize_client_address("203.0.113.7")
+        normalize_client_address("2001:db8::1")
+    assert caplog.records == []

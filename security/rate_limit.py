@@ -19,6 +19,7 @@ not read here, because any client can set it.
 """
 
 import ipaddress
+import logging
 import math
 import os
 import time
@@ -33,6 +34,10 @@ from limits import RateLimitItem, parse_many
 from limits.storage import MemoryStorage
 from limits.strategies import FixedWindowRateLimiter
 from pydantic import BaseModel, ConfigDict, field_validator
+
+from security.rate_limited_warning import RateLimitedWarning
+
+logger = logging.getLogger(__name__)
 
 TOO_MANY_REQUESTS_DETAIL = "Too many requests. Please try again later."
 
@@ -132,6 +137,13 @@ EndpointT = TypeVar("EndpointT", bound=Callable[..., Any])
 
 
 _UNKNOWN_CLIENT = "unknown"
+# All clients without a usable address share one budget, so this usually
+# means a proxy or socket setup is wrong. The address itself is not logged.
+_warn_unknown_client = RateLimitedWarning(
+    logger,
+    "Client address missing or not an IP address; using the shared 'unknown' "
+    "rate-limit key. Check the proxy and FORWARDED_ALLOW_IPS settings",
+)
 # One IPv6 customer usually gets at least a /64, so rotating addresses inside
 # it must not give a fresh budget.
 _IPV6_CLIENT_PREFIX = 64
@@ -145,10 +157,12 @@ def normalize_client_address(host: str | None) -> str:
     becomes its /64 network. Missing or unparsable values share one key.
     """
     if not host:
+        _warn_unknown_client()
         return _UNKNOWN_CLIENT
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
+        _warn_unknown_client()
         return _UNKNOWN_CLIENT
     if isinstance(address, ipaddress.IPv6Address):
         if address.ipv4_mapped is not None:
