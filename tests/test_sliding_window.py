@@ -57,3 +57,27 @@ def test_recent_drops_out_of_order_expired_key_instead_of_crashing():
     assert log.recent("stale") is None
     assert "stale" not in log
     assert removed == ["stale"]
+
+
+def test_withdraw_one_ignores_timestamps_that_expired_in_flight():
+    """
+    Regression: the expired oldest timestamp was withdrawn instead of the
+    reservation, which then stayed counted for a whole extra window.
+    """
+    log, clock, removed = make(window=60.0)
+    log.add("a")  # t=1000, a real failure
+    clock.now = 1050
+    log.add("a")  # t=1050, the reservation
+    clock.now = 1070  # the t=1000 failure expires while the request runs
+    log.withdraw_one("a")
+    assert "a" not in log
+    assert removed == ["a"]
+
+
+def test_withdraw_one_on_fully_expired_key_removes_it_once():
+    log, clock, removed = make(window=60.0)
+    log.add("a")
+    clock.now += 61
+    log.withdraw_one("a")
+    assert "a" not in log
+    assert removed == ["a"]

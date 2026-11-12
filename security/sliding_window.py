@@ -120,8 +120,14 @@ class SlidingWindowLog[K: Hashable]:
         dropping the newest would leave the key behind keys that expire later,
         and the front-only sweep would then miss it. The cost is that the
         remaining count may expire a little later than exact, never earlier.
+
+        Expired timestamps are pruned first; otherwise an attempt that expired
+        while the request was in flight would be withdrawn instead of the
+        reservation, which would then stay counted for another full window.
         """
-        timestamps = self._entries.get(key)
+        # recent() sweeps expired keys and prunes this key's old timestamps;
+        # the key may be gone afterwards.
+        timestamps = self.recent(key)
         if timestamps is None:
             return
         if len(timestamps) == 1:

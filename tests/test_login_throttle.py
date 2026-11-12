@@ -173,6 +173,21 @@ def test_release_keeps_expiry_order():
     assert latest == sorted(latest)
 
 
+def test_release_after_old_failure_expired_frees_the_client_slot():
+    """
+    Regression: the expired failure was withdrawn instead of the reservation,
+    so the key, and its slot in the per-client username count, lingered.
+    """
+    throttle, clock = make(window=60.0)
+    fail(throttle)  # t=1000
+    clock.now = 1050
+    assert throttle.acquire("alice", IP) is None  # reservation
+    clock.now = 1070  # the t=1000 failure has expired
+    throttle.release("alice", IP)
+    assert ("alice", IP) not in throttle._by_client
+    assert throttle._usernames_per_client == {}
+
+
 def test_release_without_reservation_is_a_no_op():
     throttle, _ = make()
     throttle.release("alice", IP)
