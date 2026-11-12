@@ -2,7 +2,7 @@
 Login throttling on failed attempts.
 
 Sliding-window counters of failed logins, keyed by client (an IPv4 address or
-an IPv6 /64, see ``security.rate_limit.client_ip``):
+an IPv6 /64, see ``security.client_address.client_ip``):
 
 * per (username, client): ``max_failures`` failures block that client from
   that username, even with the right password (otherwise a 200 vs 429 answer

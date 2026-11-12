@@ -21,6 +21,7 @@ from schema.auth import (
     MessageResponse,
 )
 from schema.climber import ClimberCreate, AuthOut, normalize_username
+from security.client_address import client_ip
 from security.hashing import (
     hash_password_async,
     needs_rehash,
@@ -33,7 +34,6 @@ from security.rate_limit import (
     RATE_LIMITED_RESPONSE,
     RateLimitedRoute,
     TOO_MANY_REQUESTS_DETAIL,
-    client_ip,
     login_rate_limit,
     password_reset_confirm_rate_limit,
     password_reset_request_rate_limit,

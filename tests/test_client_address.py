@@ -1,12 +1,12 @@
-"""Unit tests for client address normalization in security/rate_limit.py"""
+"""Unit tests for security/client_address.py"""
 
 import logging
 from types import SimpleNamespace
 
 import pytest
 
-from security import rate_limit
-from security.rate_limit import client_ip, normalize_client_address
+from security import client_address
+from security.client_address import client_ip, normalize_client_address
 from security.rate_limited_warning import RateLimitedWarning
 
 
@@ -61,17 +61,17 @@ def test_client_ip_uses_connection_host():
 def unknown_client_clock(monkeypatch):
     clock = FakeClock()
     warning = RateLimitedWarning(
-        rate_limit.logger,
+        client_address.logger,
         "Client address missing or not an IP address",
         interval_seconds=60.0,
         clock=clock,
     )
-    monkeypatch.setattr(rate_limit, "_warn_unknown_client", warning)
+    monkeypatch.setattr(client_address, "_warn_unknown_client", warning)
     return clock
 
 
 def test_unparsable_address_logs_rate_limited_warning(caplog, unknown_client_clock):
-    with caplog.at_level(logging.WARNING, logger="security.rate_limit"):
+    with caplog.at_level(logging.WARNING, logger="security.client_address"):
         for _ in range(50):
             normalize_client_address("proxy-sock")
         normalize_client_address(None)
@@ -86,7 +86,7 @@ def test_unparsable_address_logs_rate_limited_warning(caplog, unknown_client_clo
 
 
 def test_valid_addresses_do_not_warn(caplog, unknown_client_clock):
-    with caplog.at_level(logging.WARNING, logger="security.rate_limit"):
+    with caplog.at_level(logging.WARNING, logger="security.client_address"):
         normalize_client_address("203.0.113.7")
         normalize_client_address("2001:db8::1")
     assert caplog.records == []
