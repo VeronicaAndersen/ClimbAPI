@@ -304,11 +304,11 @@ def test_full_table_does_not_scan_every_key():
 
 
 # ---------------------------------------------------------------------------
-# Distinct usernames per client
+# Distinct usernames per client (pressure_ratio=0 enforces the cap always)
 # ---------------------------------------------------------------------------
 
 def test_client_is_refused_new_usernames_past_its_cap():
-    throttle, _ = make(per_client=3, window=60.0)
+    throttle, _ = make(per_client=3, window=60.0, pressure_ratio=0)
     for name in ("a", "b", "c"):
         fail(throttle, username=name)
     assert throttle.acquire("d", IP) == 60
@@ -317,14 +317,14 @@ def test_client_is_refused_new_usernames_past_its_cap():
 
 
 def test_client_cap_is_per_client():
-    throttle, _ = make(per_client=3)
+    throttle, _ = make(per_client=3, pressure_ratio=0)
     for name in ("a", "b", "c"):
         fail(throttle, username=name)
     assert throttle.acquire("d", OTHER_IP) is None
 
 
 def test_client_cap_frees_up_when_failures_expire():
-    throttle, clock = make(per_client=3, window=60.0)
+    throttle, clock = make(per_client=3, window=60.0, pressure_ratio=0)
     for name in ("a", "b", "c"):
         fail(throttle, username=name)
     clock.now += 61
@@ -333,7 +333,7 @@ def test_client_cap_frees_up_when_failures_expire():
 
 
 def test_success_and_release_free_client_slots():
-    throttle, _ = make(per_client=2)
+    throttle, _ = make(per_client=2, pressure_ratio=0)
     fail(throttle, username="a")
     assert throttle.acquire("b", IP) is None
     throttle.release("b", IP)
@@ -345,7 +345,7 @@ def test_success_and_release_free_client_slots():
 
 def test_successful_logins_do_not_use_client_cap():
     """Many users behind one NAT can log in; only failures use the cap."""
-    throttle, _ = make(per_client=3)
+    throttle, _ = make(per_client=3, pressure_ratio=0)
     for i in range(50):
         assert throttle.acquire(f"member{i}", IP) is None
         throttle.succeeded(f"member{i}", IP)
@@ -359,6 +359,47 @@ def test_junk_usernames_from_one_client_cannot_block_user_on_clean_ip():
             throttle.failed(f"junk{i}")
     assert len(throttle._by_client) == 20
     assert throttle.acquire("alice", IP) is None
+
+
+def test_client_cap_not_enforced_below_pressure():
+    """
+    Regression: 20 typos from a shared address (CGNAT, gym wifi) locked
+    everyone else there out of new usernames even with an empty table.
+    """
+    throttle, _ = make(per_client=20, max_tracked=1000, pressure_ratio=0.1)
+    for i in range(25):
+        fail(throttle, username=f"typo{i}")
+    assert len(throttle._by_client) == 25 < throttle.pressure_threshold
+    assert throttle.acquire("alice", IP) is None
+
+
+def test_client_cap_enforced_once_under_pressure():
+    throttle, _ = make(per_client=20, max_tracked=1000, pressure_ratio=0.1)
+    # Other clients fill the table to the pressure threshold (100 keys).
+    for i in range(80):
+        fail(throttle, username=f"user{i}", ip=f"10.0.{i}.1")
+    for i in range(20):
+        fail(throttle, username=f"junk{i}")
+    assert throttle.acquire("alice", IP) == 60
+    # A different client is not affected by this client's cap.
+    assert throttle.acquire("alice", OTHER_IP) is None
+
+
+def test_pressure_counts_only_active_keys():
+    throttle, clock = make(per_client=20, max_tracked=1000, pressure_ratio=0.1)
+    for i in range(80):
+        fail(throttle, username=f"user{i}", ip=f"10.0.{i}.1")
+    clock.now += 61  # all of those have expired
+    for i in range(20):
+        fail(throttle, username=f"junk{i}")
+    assert throttle.acquire("alice", IP) is None
+
+
+def test_pressure_ratio_one_enforces_cap_only_when_full():
+    throttle, _ = make(per_client=2, max_tracked=4, pressure_ratio=1.0)
+    fail(throttle, username="a")
+    fail(throttle, username="b")
+    assert throttle.acquire("c", IP) is None
 
 
 # ---------------------------------------------------------------------------
@@ -390,7 +431,7 @@ def test_full_table_warning_is_rate_limited(caplog):
 
 
 def test_client_cap_warning_is_logged(caplog):
-    throttle, _ = make(per_client=1)
+    throttle, _ = make(per_client=1, pressure_ratio=0)
     fail(throttle, username="a")
     with caplog.at_level(logging.WARNING, logger="security.login_throttle"):
         for i in range(10):

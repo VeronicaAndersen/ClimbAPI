@@ -64,15 +64,16 @@ The auth endpoints are rate limited per client IP, and failed logins are also li
 | `RATE_LIMIT_REFRESH` | `30/minute` | `/auth/refresh`, per IP |
 | `LOGIN_MAX_FAILURES` | `5` | Failed logins per username and client IP before that IP is blocked for the username |
 | `LOGIN_MAX_FAILURES_PER_USERNAME` | `50` | Failed logins per username across all IPs; past this, every IP that has failed on the username is blocked |
-| `LOGIN_MAX_USERNAMES_PER_CLIENT` | `20` | Distinct usernames one client may have recent failures on; past this it gets `429` for new usernames |
+| `LOGIN_MAX_USERNAMES_PER_CLIENT` | `20` | Distinct usernames one client may have recent failures on; past this it gets `429` for new usernames. Only enforced while the throttle is under pressure |
 | `LOGIN_THROTTLE_MAX_TRACKED` | `200000` | Entries kept per throttle counter. A failed login costs roughly 600 bytes (short usernames) to 1 KB (200-character usernames) across both counters, so about 120-200 MB when full |
+| `LOGIN_THROTTLE_PRESSURE_RATIO` | `0.1` | The throttle counts as under pressure once a counter holds this share of `LOGIN_THROTTLE_MAX_TRACKED` (20,000 keys by default). `0` enforces the per-client cap always, `1` only when full |
 | `LOGIN_FAILURE_WINDOW_SECONDS` | `900` | Sliding window for all failure limits |
 
 Limit strings use the [limits](https://limits.readthedocs.io/en/stable/quickstart.html#rate-limit-string-notation) notation, for example `10/minute` or `20/minute;100/hour`. Invalid values stop the app at startup.
 
 Only failed logins count, and a successful login clears the counter for that username and IP. Here "IP" means an IPv4 address or an IPv6 /64. A blocked IP is refused even with the correct password, so a guesser cannot tell when they hit it. Because the block is per IP, someone guessing a user's password cannot lock the real user out from another network; once the per-username cap is reached, a new IP still gets through until its first failure.
 
-The throttle keeps at most `LOGIN_THROTTLE_MAX_TRACKED` entries and never forgets an active one early, because that would reset its counter. If it is full of active entries it fails closed: every username without recent failures from that IP gets `429` until the oldest entry expires, and a warning is logged (at most once a minute). `LOGIN_MAX_USERNAMES_PER_CLIENT` makes that impractical: with the defaults, filling the table takes failed logins from about 10,000 different IPs within one window. A user who has not failed recently is only affected while the table is full.
+The throttle keeps at most `LOGIN_THROTTLE_MAX_TRACKED` entries and never forgets an active one early, because that would reset its counter. If it is full of active entries it fails closed: every username without recent failures from that IP gets `429` until the oldest entry expires, and a warning is logged (at most once a minute). `LOGIN_MAX_USERNAMES_PER_CLIENT` makes that impractical: once the throttle is under pressure, filling the rest of the table takes failed logins from about 9,000 different IPs within one window. The cap is not applied before that, so a few people mistyping on a shared address (CGNAT, a gym's wifi, one IPv6 /64) do not lock everyone else there out. When the cap applies, the `Retry-After` is the full window, an upper bound. A user who has not failed recently is only affected while the table is full, or, under pressure, when their address has already failed on many usernames.
 
 Counters are kept in memory, which works because the container runs a single uvicorn worker. With several workers or replicas, each process counts on its own; move the storage to Redis before scaling out.
 

@@ -65,6 +65,7 @@ _ENV_VARS = {
     "LOGIN_MAX_FAILURES_PER_USERNAME": "LOGIN_MAX_FAILURES_PER_USERNAME",
     "LOGIN_MAX_USERNAMES_PER_CLIENT": "LOGIN_MAX_USERNAMES_PER_CLIENT",
     "LOGIN_THROTTLE_MAX_TRACKED": "LOGIN_THROTTLE_MAX_TRACKED",
+    "LOGIN_THROTTLE_PRESSURE_RATIO": "LOGIN_THROTTLE_PRESSURE_RATIO",
 }
 
 
@@ -85,11 +86,15 @@ class RateLimitSettings(BaseModel):
     # have failed on the username are blocked.
     LOGIN_MAX_FAILURES_PER_USERNAME: int = 50
     # Distinct usernames a client (IPv4 address or IPv6 /64) may have recent
-    # failures on; past this it is refused new usernames.
+    # failures on; past this it is refused new usernames. Only enforced under
+    # pressure, see LOGIN_THROTTLE_PRESSURE_RATIO.
     LOGIN_MAX_USERNAMES_PER_CLIENT: int = 20
     # Entries per throttle counter. A failed login costs roughly 600 bytes to
     # 1 KB across both counters, so 200,000 is about 120-200 MB when full.
     LOGIN_THROTTLE_MAX_TRACKED: int = 200_000
+    # Share of LOGIN_THROTTLE_MAX_TRACKED from which the per-client username
+    # cap applies. 0 enforces it always, 1 only when a counter is full.
+    LOGIN_THROTTLE_PRESSURE_RATIO: float = 0.1
 
     @field_validator(
         "LOGIN", "SIGNUP", "PASSWORD_RESET_REQUEST", "PASSWORD_RESET_CONFIRM", "REFRESH"
@@ -100,6 +105,13 @@ class RateLimitSettings(BaseModel):
             parse_many(value)
         except ValueError as e:
             raise ValueError(f"Invalid rate limit string: {value!r}") from e
+        return value
+
+    @field_validator("LOGIN_THROTTLE_PRESSURE_RATIO")
+    @classmethod
+    def must_be_a_ratio(cls, value: float) -> float:
+        if not 0 <= value <= 1:
+            raise ValueError("must be between 0 and 1")
         return value
 
     @field_validator(

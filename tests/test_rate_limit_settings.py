@@ -19,6 +19,7 @@ def test_defaults():
     assert settings.LOGIN_MAX_FAILURES_PER_USERNAME == 50
     assert settings.LOGIN_MAX_USERNAMES_PER_CLIENT == 20
     assert settings.LOGIN_THROTTLE_MAX_TRACKED == 200_000
+    assert settings.LOGIN_THROTTLE_PRESSURE_RATIO == 0.1
 
 
 def test_env_overrides(monkeypatch):
@@ -51,3 +52,16 @@ def test_non_positive_throttle_values_rejected(monkeypatch, name):
     monkeypatch.setenv(name, "0")
     with pytest.raises(ValidationError):
         load_rate_limit_settings()
+
+
+@pytest.mark.parametrize("value", ["-0.1", "1.5"])
+def test_pressure_ratio_outside_zero_to_one_rejected(monkeypatch, value):
+    monkeypatch.setenv("LOGIN_THROTTLE_PRESSURE_RATIO", value)
+    with pytest.raises(ValidationError):
+        load_rate_limit_settings()
+
+
+@pytest.mark.parametrize("value", ["0", "1", "0.25"])
+def test_pressure_ratio_bounds_accepted(monkeypatch, value):
+    monkeypatch.setenv("LOGIN_THROTTLE_PRESSURE_RATIO", value)
+    assert load_rate_limit_settings().LOGIN_THROTTLE_PRESSURE_RATIO == float(value)

@@ -73,6 +73,11 @@ class SlidingWindowLog[K: Hashable]:
         del timestamps[:expired]
         return timestamps
 
+    def active_count(self) -> int:
+        """Number of keys, after dropping the ones that have expired."""
+        self._drop_expired_keys(self._clock())
+        return len(self._entries)
+
     def is_full(self) -> bool:
         return len(self._entries) >= self.max_keys
 

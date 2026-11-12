@@ -10,8 +10,9 @@ an IPv6 /64, see ``security.client_address.client_ip``):
 * per username, across all clients: once ``max_failures_per_username`` is
   reached, only clients that have themselves failed on the username are
   blocked;
-* per client, distinct usernames with recent failures: a client that has
-  failed on ``max_usernames_per_client`` different usernames is refused new
+* per client, distinct usernames with recent failures, only while the
+  throttle is under pressure (see below): a client that has failed on
+  ``max_usernames_per_client`` different usernames is then refused new
   usernames until one of them expires.
 
 An attacker can therefore lock out a username only for their own client, and a
@@ -39,10 +40,17 @@ Expired keys are dropped as time passes, but a key that still has attempts
 inside the window is never evicted: that would reset its counter and let an
 attacker flush it by trying many other usernames. When every slot holds an
 active key, new keys are refused for everyone (fail closed) until the oldest
-expires, and a warning is logged. The per-client username cap keeps that
-impractical: with the defaults, filling the table takes failed logins from
-about 10,000 distinct clients within one window. A user who has not failed
-before is only affected while the table is full.
+expires, and a warning is logged.
+
+The per-client username cap keeps that impractical, but on its own it would
+also let 20 typos from a shared address (CGNAT, gym wifi, one IPv6 /64) lock
+everyone else there out of new usernames. So it only applies while a counter
+holds at least ``pressure_ratio`` of ``max_tracked`` keys (default 10%, i.e.
+20,000 keys). Below that there is plenty of room and the cap is not needed;
+above it, filling the rest of the table takes failed logins from about 9,000
+distinct clients within one window. A user who has not failed before is only
+affected while the table is full, or, under pressure, when their address has
+already failed on many usernames.
 """
 
 import logging
@@ -68,6 +76,7 @@ class LoginThrottle:
         max_usernames_per_client: int,
         enabled: bool = True,
         max_tracked: int = 200_000,
+        pressure_ratio: float = 0.1,
         clock: Callable[[], float] = time.monotonic,
         warning_interval_seconds: float = 60.0,
     ) -> None:
@@ -76,6 +85,8 @@ class LoginThrottle:
         self.max_usernames_per_client = max_usernames_per_client
         self.window_seconds = window_seconds
         self.enabled = enabled
+        # Key count from which the per-client username cap applies.
+        self.pressure_threshold = math.ceil(pressure_ratio * max_tracked)
         # Active (username, client) keys per client. Kept in step with
         # _by_client through its on_remove hook, so it costs one int per client.
         self._usernames_per_client: dict[str, int] = {}
@@ -198,12 +209,22 @@ class LoginThrottle:
             self._by_username.seconds_until_expiry(username_failures[excess]),
         )
 
+    def _under_pressure(self) -> bool:
+        return (
+            self._by_client.active_count() >= self.pressure_threshold
+            or self._by_username.active_count() >= self.pressure_threshold
+        )
+
     def _new_key_retry_after(self, username: str, client_ip: str) -> int | None:
         """Checks for a (username, client) pair with no recent failures."""
-        if self._usernames_per_client.get(client_ip, 0) >= self.max_usernames_per_client:
+        if (
+            self._usernames_per_client.get(client_ip, 0) >= self.max_usernames_per_client
+            and self._under_pressure()
+        ):
             self._warn_client_cap()
-            # Which of the client's keys expires first is not tracked; the
-            # window is an upper bound.
+            # Which of the client's keys expires first is not tracked (that
+            # would need a per-client ordered index, about doubling memory),
+            # so the window is used as an upper bound.
             return max(1, math.ceil(self.window_seconds))
         for full in (
             self._by_client.seconds_until_capacity((username, client_ip)),
@@ -220,6 +241,7 @@ login_throttle = LoginThrottle(
     max_failures_per_username=rate_limit_settings.LOGIN_MAX_FAILURES_PER_USERNAME,
     max_usernames_per_client=rate_limit_settings.LOGIN_MAX_USERNAMES_PER_CLIENT,
     max_tracked=rate_limit_settings.LOGIN_THROTTLE_MAX_TRACKED,
+    pressure_ratio=rate_limit_settings.LOGIN_THROTTLE_PRESSURE_RATIO,
     window_seconds=rate_limit_settings.LOGIN_FAILURE_WINDOW_SECONDS,
     enabled=rate_limit_settings.ENABLED,
 )
