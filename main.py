@@ -12,6 +12,9 @@ from security.hashing import prepare_dummy_hash
 
 logger = logging.getLogger(__name__)
 
+# Long enough to identify a query, short enough to keep log lines readable.
+_MAX_LOGGED_STATEMENT = 1000
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -45,18 +48,24 @@ async def database_error_handler(request: Request, exc: DBAPIError):
 
     Driver messages carry row data even with hide_parameters, e.g. asyncpg's
     DETAIL "Key (username)=(alice) already exists." or "Failing row contains
-    (...)", which can include a password hash. Only the driver error type and
-    SQLSTATE are logged. Handled here rather than by the catch-all below,
+    (...)", which can include a password hash. Only the driver error type,
+    SQLSTATE and the SQL statement are logged. The statement has placeholders
+    ($1, :name) and never the bound values, because the app builds queries
+    through the ORM; it is capped in length. Handled here rather than by the catch-all below,
     because Starlette re-raises catch-all errors after responding and the
     server would then log the full message. Routers that catch
     IntegrityError themselves are not affected.
     """
+    statement = exc.statement or ""
+    if len(statement) > _MAX_LOGGED_STATEMENT:
+        statement = statement[:_MAX_LOGGED_STATEMENT] + " ..."
     logger.error(
-        "Database error %s (sqlstate=%s) on %s %s",
+        "Database error %s (sqlstate=%s) on %s %s; statement: %s",
         type(exc.orig).__name__,
         getattr(exc.orig, "sqlstate", None),
         request.method,
         request.url.path,
+        statement,
     )
     return JSONResponse(
         status_code=500,

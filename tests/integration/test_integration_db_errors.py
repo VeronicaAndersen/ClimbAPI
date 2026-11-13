@@ -47,10 +47,13 @@ def _all_logged_text(records) -> str:
     return "\n".join(parts)
 
 
+STATEMENT = "SELECT climber.id FROM climber WHERE climber.username = $1"
+
+
 class ExplodingSession:
     async def scalar(self, _statement):
         raise IntegrityError(
-            "SELECT climber.id FROM climber WHERE climber.username = $1",
+            STATEMENT,
             {"username": SECRET_USERNAME},
             UniqueViolation(f'duplicate key value violates unique constraint\n{DETAIL}'),
         )
@@ -82,6 +85,9 @@ async def test_dbapi_error_is_generic_500_and_logs_no_row_data(client, caplog):
     assert "DETAIL" not in logged
     assert "UniqueViolation" in logged
     assert "23505" in logged
+    # The statement is logged for debugging, with placeholders only.
+    assert STATEMENT in logged
+    assert "parameters" not in logged
 
 
 class RacingSignupSession:
@@ -113,3 +119,19 @@ async def test_router_integrity_error_handling_still_returns_409(client):
     )
     assert resp.status_code == 409
     assert resp.json() == {"detail": "Username is already taken"}
+
+
+async def test_logged_statement_is_capped(caplog):
+    from types import SimpleNamespace
+
+    from main import database_error_handler
+
+    long_statement = "SELECT " + ", ".join(f"col{i}" for i in range(2000)) + " FROM t"
+    exc = IntegrityError(long_statement, {}, UniqueViolation("boom"))
+    request = SimpleNamespace(method="GET", url=SimpleNamespace(path="/x"))
+    with caplog.at_level(logging.ERROR):
+        resp = await database_error_handler(request, exc)
+    assert resp.status_code == 500
+    message = caplog.records[-1].getMessage()
+    assert message.endswith(" ...")
+    assert len(message) < 1200
