@@ -48,7 +48,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-Mail settings are optional for local startup. Without configured mail credentials, password-reset links are printed for development.
+Mail settings are optional for local startup. Without configured mail credentials no reset email is sent: the API logs a warning (at most once a minute) and still answers the request normally. The reset link is never printed or logged, because it contains a live token. To try the reset flow locally, point the `MAIL_*` settings at a local SMTP catcher such as [Mailpit](https://mailpit.axllent.org/).
 
 ## Rate limiting
 

@@ -1,7 +1,20 @@
+import logging
 import os
 from typing import Optional
 
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
+
+from security.rate_limited_warning import RateLimitedWarning
+
+logger = logging.getLogger(__name__)
+
+# Never log the reset link: it contains a live token, and on hosted platforms
+# stdout and logs are readable by more people than the account owner.
+_warn_mail_not_configured = RateLimitedWarning(
+    logger,
+    "Mail is not configured (MAIL_USERNAME/MAIL_PASSWORD); "
+    "password reset email not sent",
+)
 
 
 class EmailSettings:
@@ -40,8 +53,8 @@ def get_mail_config() -> Optional[ConnectionConfig]:
 async def send_password_reset_email(email: str, token: str, firstname: Optional[str] = None) -> bool:
     config = get_mail_config()
     if not config:
-        print(f"[DEV MODE] Password reset link: {email_settings.FRONTEND_URL}/reset-password?token={token}")
-        return True
+        _warn_mail_not_configured()
+        return False
 
     reset_url = f"{email_settings.FRONTEND_URL}/reset-password?token={token}"
     greeting = f"Hej {firstname}" if firstname else "Hej"
@@ -84,5 +97,6 @@ async def send_password_reset_email(email: str, token: str, firstname: Optional[
         await fm.send_message(message)
         return True
     except Exception as e:
-        print(f"Failed to send email: {e}")
+        # The message can include the recipient's address; log the type only.
+        logger.error("Failed to send password reset email (%s)", type(e).__name__)
         return False
