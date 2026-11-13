@@ -39,6 +39,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     allow_headers=["*"],
+    # Lets the browser app read how long to wait after a 429.
+    expose_headers=["Retry-After"],
 )
 
 app.include_router(api_router)
