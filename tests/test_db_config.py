@@ -247,3 +247,58 @@ async def test_failed_commit_is_reraised_unchanged(monkeypatch):
     assert raised.value is error
     assert session.rolled_back
     assert session.closed
+
+
+
+async def test_cancel_in_same_turn_as_step_finishes_is_not_lost():
+    """
+    Regression: when the step finished in the same loop turn in which the
+    caller was cancelled, the cancellation was dropped and the caller went on.
+    """
+    gate = asyncio.get_running_loop().create_future()
+
+    async def step():
+        await gate
+
+    async def caller():
+        _error, cancelled = await config._run_to_completion(step())
+        if cancelled is not None:
+            raise cancelled
+        return "carried on"
+
+    task = asyncio.create_task(caller())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    gate.set_result(None)
+    await asyncio.sleep(0)  # the step completes
+    task.cancel()  # before the caller observes it
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+class _FailingCloseSession(_SlowSession):
+    async def close(self):
+        await asyncio.sleep(0.02)
+        self.closed = True
+        raise OSError(f"close broke for {SECRET}")
+
+
+async def test_cancel_wins_over_close_error_on_success_path(monkeypatch, caplog):
+    """Regression: a close error was raised instead of the cancellation."""
+    session = _FailingCloseSession()
+    monkeypatch.setattr(config, "AsyncSessionLocal", lambda: session)
+    body_done = asyncio.Event()
+
+    async def request():
+        async with asynccontextmanager(config.get_session)():
+            body_done.set()
+
+    task = asyncio.create_task(request())
+    await body_done.wait()
+    await asyncio.sleep(0)  # now inside close()
+    task.cancel()
+    with caplog.at_level(logging.DEBUG):
+        await _cancelled_result(task)
+    assert session.closed
+    assert "Close failed during cancellation (OSError)" in caplog.text
+    assert SECRET not in caplog.text

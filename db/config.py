@@ -46,8 +46,10 @@ async def _run_to_completion(
         try:
             await asyncio.shield(task)
         except asyncio.CancelledError as err:
-            if not task.done():
-                cancelled = err  # we were cancelled; keep waiting for the step
+            # Our caller was cancelled. Recorded even if the step finished in
+            # the same loop turn: dropping it would let the request carry on
+            # as if never cancelled. Keep waiting while the step runs.
+            cancelled = err
         except BaseException:  # noqa: BLE001 - the step's own error, read below
             break
     if task.cancelled():
@@ -103,7 +105,10 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         raise
     else:
         error, cancelled = await _run_to_completion(session.close())
+        if cancelled is not None:
+            # The cancellation wins; a close error would only hide it.
+            if error is not None:
+                logger.error("Close failed during cancellation (%s)", type(error).__name__)
+            raise cancelled
         if error is not None:
             raise error
-        if cancelled is not None:
-            raise cancelled
