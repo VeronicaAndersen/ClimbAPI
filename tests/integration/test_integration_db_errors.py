@@ -2,6 +2,7 @@
 
 import logging
 
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import IntegrityError
 
 from db.config import get_session
@@ -18,6 +19,34 @@ class UniqueViolation(Exception):
     sqlstate = "23505"
 
 
+class UvicornLikeErrorLogging:
+    """
+    Logs exceptions that escape the app with their traceback, as uvicorn does
+    ("Exception in ASGI application"). The test harness alone logs nothing for
+    them, so without this a leak through the server log would go unnoticed.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await self.app(scope, receive, send)
+        except Exception:
+            logging.getLogger("uvicorn.error").exception("Exception in ASGI application")
+
+
+def _all_logged_text(records) -> str:
+    """Messages plus formatted tracebacks, i.e. what a log handler would write."""
+    formatter = logging.Formatter()
+    parts = []
+    for record in records:
+        parts.append(record.getMessage())
+        if record.exc_info:
+            parts.append(formatter.formatException(record.exc_info))
+    return "\n".join(parts)
+
+
 class ExplodingSession:
     async def scalar(self, _statement):
         raise IntegrityError(
@@ -28,24 +57,27 @@ class ExplodingSession:
 
 
 async def test_dbapi_error_is_generic_500_and_logs_no_row_data(client, caplog):
-    """Regression: the error message, with asyncpg's DETAIL line, reached the logs."""
+    """
+    Regression: the error escaped to the server, which logged its message and
+    traceback, including asyncpg's DETAIL line with the username.
+    """
 
     async def exploding_session():
         yield ExplodingSession()
 
+    # `client` is requested for its cleanup of app.dependency_overrides.
     app.dependency_overrides[get_session] = exploding_session
+    transport = ASGITransport(app=UvicornLikeErrorLogging(app))
     with caplog.at_level(logging.DEBUG):
-        resp = await client.post(
-            f"{BASE}/auth/login", json={"username": SECRET_USERNAME, "password": "pw"}
-        )
+        async with AsyncClient(transport=transport, base_url="http://test") as server:
+            resp = await server.post(
+                f"{BASE}/auth/login", json={"username": SECRET_USERNAME, "password": "pw"}
+            )
 
     assert resp.status_code == 500
     assert resp.json() == {"detail": "Internal server error"}
     assert SECRET_USERNAME not in resp.text
-    logged = "\n".join(
-        record.getMessage() + (str(record.exc_info[1]) if record.exc_info else "")
-        for record in caplog.records
-    )
+    logged = _all_logged_text(caplog.records)
     assert SECRET_USERNAME not in logged
     assert "DETAIL" not in logged
     assert "UniqueViolation" in logged
