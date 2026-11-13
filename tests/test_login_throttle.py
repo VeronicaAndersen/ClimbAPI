@@ -223,6 +223,7 @@ def test_client_count_stays_exact_when_key_expires_during_acquire():
     expired in between was re-created without being counted, and the
     per-client username count drifted below the real number of keys.
     """
+    raced_offsets = []
     for offset in range(40):
         clock = TickingClock(1000.0)
         throttle = LoginThrottle(
@@ -234,10 +235,38 @@ def test_client_count_stays_exact_when_key_expires_during_acquire():
             clock=clock,
         )
         throttle.failed(ok(throttle.acquire("alice", IP)))
+
+        # Spy on add(): the race is a key that is present when add() starts
+        # and is re-created inside it because it expired in between.
+        log = throttle._by_client
+        real_add, real_on_add = log.add, log._on_add
+        created = []
+
+        def on_add(key, real_on_add=real_on_add, created=created):
+            created.append(key)
+            real_on_add(key)
+
+        def spying_add(
+            key, at=None, *, log=log, real_add=real_add, created=created, offset=offset
+        ):
+            present = key in log._entries
+            before = len(created)
+            result = real_add(key, at=at)
+            if present and len(created) > before:
+                raced_offsets.append(offset)
+            return result
+
+        log._on_add = on_add
+        log.add = spying_add
+
         clock.now += 60.0 - offset * 0.1  # land the expiry inside acquire()
         assert allowed(throttle.acquire("alice", IP))
         keys = sum(1 for key in throttle._by_client._entries if key[1] == IP)
         assert throttle._usernames_per_client.get(IP, 0) == keys, offset
+
+    # Guard the sweep itself: if timing changes so no offset hits the race,
+    # this test would silently stop covering it.
+    assert raced_offsets, "no offset re-created the key inside add()"
 
 
 def test_release_of_unrecorded_reservation_is_a_no_op():
