@@ -85,18 +85,20 @@ async def send_password_reset_email(email: str, token: str, firstname: Optional[
     </html>
     """
 
-    message = MessageSchema(
-        subject="Återställ ditt lösenord - Grepp",
-        recipients=[email],
-        body=html_content,
-        subtype=MessageType.html,
-    )
-
     try:
+        # Built inside the try: an invalid stored address (e.g. "anna@gmail")
+        # makes MessageSchema raise a ValidationError whose text includes the
+        # address, which must not reach the background-task error log.
+        message = MessageSchema(
+            subject="Återställ ditt lösenord - Grepp",
+            recipients=[email],
+            body=html_content,
+            subtype=MessageType.html,
+        )
         fm = FastMail(config)
         await fm.send_message(message)
         return True
     except Exception as e:
-        # The message can include the recipient's address; log the type only.
+        # The error text can include the recipient's address; log the type only.
         logger.error("Failed to send password reset email (%s)", type(e).__name__)
         return False
