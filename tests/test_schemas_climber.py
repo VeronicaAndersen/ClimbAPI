@@ -141,3 +141,26 @@ def test_username_with_format_or_surrogate_characters_is_rejected(model, usernam
     """Regression: zero-width and bidi characters allowed look-alike usernames."""
     with pytest.raises(ValidationError):
         model(username=username, password="secret123", firstname="A", lastname="B")
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+@pytest.mark.parametrize("field", ["email", "firstname", "lastname", "club"])
+@pytest.mark.parametrize("value", ["a\x00b", "a\x1bb"])
+def test_text_fields_reject_control_characters(model, field, value):
+    """Regression: NUL in these fields reached the database and gave a 500."""
+    data = {"username": "alice", "password": "secret123", "firstname": "A", "lastname": "B"}
+    data[field] = value
+    with pytest.raises(ValidationError):
+        model(**data)
+
+
+def test_text_fields_accept_ordinary_text():
+    c = ClimberCreate(
+        username="alice",
+        password="secret123",
+        firstname="Åsa",
+        lastname="Öberg-Lind",
+        club="Klätterklubben 08",
+        email="Alice@Example.com",
+    )
+    assert (c.firstname, c.club, c.email) == ("Åsa", "Klätterklubben 08", "alice@example.com")

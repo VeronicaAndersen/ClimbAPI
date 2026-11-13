@@ -430,3 +430,34 @@ class TestCredentialLengthLimits:
             f"{BASE}/auth/password-reset/request", json={"username": "u" * 201}
         )
         assert resp.status_code == 422
+
+
+class TestPasswordResetConfirmControlCharacters:
+    async def test_nul_token_is_invalid_without_database(self, client):
+        """Regression: NUL in the token reached the database and gave a 500."""
+        from db.config import get_session
+        from main import app
+
+        normal = await client.post(
+            f"{BASE}/auth/password-reset/confirm",
+            json={"token": "no-such-token", "new_password": "newsecret1"},
+        )
+        app.dependency_overrides[get_session] = _unused_session
+        resp = await client.post(
+            f"{BASE}/auth/password-reset/confirm",
+            json={"token": "abc\x00def", "new_password": "newsecret1"},
+        )
+        assert resp.status_code == normal.status_code == 400
+        assert resp.json() == normal.json()
+
+    async def test_signup_rejects_nul_in_firstname(self, client):
+        resp = await client.post(
+            f"{BASE}/auth/signup",
+            json={
+                "username": "nulname",
+                "password": "secret123",
+                "firstname": "A\x00",
+                "lastname": "B",
+            },
+        )
+        assert resp.status_code == 422

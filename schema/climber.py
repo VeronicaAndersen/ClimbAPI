@@ -63,6 +63,16 @@ def _normalized_username_within_limit(username: str) -> str:
     return normalized
 
 
+def _without_control_characters(value: str | None) -> str | None:
+    """
+    Refuse control characters such as NUL in free-text fields: the database
+    rejects NUL in text, which used to surface as a 500 and a DataError log.
+    """
+    if value is not None and contains_control_characters(value):
+        raise ValueError("must not contain control characters")
+    return value
+
+
 class ClimberCreate(BaseModel):
     username: constr(min_length=1, max_length=USERNAME_MAX_LENGTH)
     password: constr(min_length=6, max_length=PASSWORD_MAX_LENGTH)
@@ -90,6 +100,11 @@ class ClimberCreate(BaseModel):
         if v:
             return v.strip().lower()
         return v
+
+    @field_validator('email', 'firstname', 'lastname', 'club')
+    @classmethod
+    def reject_control_characters(cls, v: str | None) -> str | None:
+        return _without_control_characters(v)
 
 
 class ClimberUpdate(BaseModel):
@@ -119,6 +134,11 @@ class ClimberUpdate(BaseModel):
         if v:
             return v.strip().lower()
         return v
+
+    @field_validator('email', 'firstname', 'lastname', 'club')
+    @classmethod
+    def reject_control_characters(cls, v: str | None) -> str | None:
+        return _without_control_characters(v)
 
 
 class AdminClimberUpdate(ClimberUpdate):
