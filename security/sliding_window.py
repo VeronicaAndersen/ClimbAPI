@@ -159,4 +159,8 @@ class SlidingWindowLog[K: Hashable]:
         return self._seconds_until(timestamp)
 
     def _seconds_until(self, timestamp: float) -> int:
-        return max(1, math.ceil(timestamp + self.window_seconds - self._clock()))
+        # Rounded to microseconds first: reservation timestamps can be nudged
+        # by a few float steps to stay unique (see LoginThrottle.acquire), and
+        # that must not add a whole second to a Retry-After.
+        remaining = round(timestamp + self.window_seconds - self._clock(), 6)
+        return max(1, math.ceil(remaining))

@@ -269,6 +269,34 @@ def test_client_count_stays_exact_when_key_expires_during_acquire():
     assert raced_offsets, "no offset re-created the key inside add()"
 
 
+def test_reservations_at_the_same_instant_are_distinct():
+    """
+    Regression: with a frozen clock two reservations shared one timestamp, so
+    withdraw_at could remove the other attempt instead of its own.
+    """
+    throttle, clock = make(max_failures=5, window=60.0, per_prefix=6)
+    site_key = ("alice", "2001:db8:aa::/48")
+    failed = ok(throttle.acquire("alice", _slash64(1)))
+    released = ok(throttle.acquire("alice", _slash64(2)))
+    assert failed.at != released.at
+    assert failed.at == clock.now  # the first one is not nudged
+    throttle.failed(failed)
+    throttle.release(released)
+    assert throttle._by_prefix.recent(site_key) == [failed.at]
+    # The nudge does not change the reported wait.
+    clock.now += 20
+    assert throttle._by_prefix.seconds_until_expiry(failed.at) == 40
+
+
+def test_frozen_clock_release_keeps_the_other_attempt_on_same_key():
+    throttle, _ = make(max_failures=5)
+    first = ok(throttle.acquire("alice", IP))
+    second = ok(throttle.acquire("alice", IP))
+    throttle.failed(first)
+    throttle.release(second)
+    assert throttle._by_client.recent(("alice", IP)) == [first.at]
+
+
 def test_release_of_unrecorded_reservation_is_a_no_op():
     throttle, _ = make()
     throttle.release(Reservation("alice", IP, 1000.0))

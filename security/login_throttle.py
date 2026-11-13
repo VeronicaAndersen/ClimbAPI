@@ -92,9 +92,9 @@ class Reservation:
     A reserved login attempt, handed to ``failed``, ``succeeded`` or
     ``release`` once the password check has finished.
 
-    ``at`` is the timestamp recorded for it, so exactly this attempt can be
-    withdrawn later; None when the throttle is disabled and nothing was
-    recorded.
+    ``at`` is the timestamp recorded for it, unique per throttle, so exactly
+    this attempt can be withdrawn later; None when the throttle is disabled
+    and nothing was recorded.
     """
 
     username: str
@@ -124,6 +124,8 @@ class LoginThrottle:
         self.window_seconds = window_seconds
         self.enabled = enabled
         self._clock = clock
+        # Timestamp of the latest reservation; each new one is strictly later.
+        self._last_reservation_at = -math.inf
         # Key count from which the per-client username cap applies.
         self.pressure_threshold = math.ceil(pressure_ratio * max_tracked)
         # Active (username, client) keys per client. Kept in step with
@@ -181,9 +183,16 @@ class LoginThrottle:
         retry_after = self._retry_after(username, client_ip, client_key)
         if retry_after is not None:
             return retry_after
-        # One clock read for both counters, kept in the reservation so exactly
-        # this attempt can be withdrawn later.
+        # One timestamp for both counters, kept in the reservation so exactly
+        # this attempt can be withdrawn later. It doubles as the reservation's
+        # unique id: if the clock has not moved since the last reservation
+        # (coarse or frozen clock), it is nudged to the next float, so
+        # withdraw_at can never remove another attempt recorded at the same
+        # instant. The nudge is nanoseconds, and keeps timestamps ordered.
         now = self._clock()
+        if now <= self._last_reservation_at:
+            now = math.nextafter(self._last_reservation_at, math.inf)
+        self._last_reservation_at = now
         # Cannot fail: _retry_after checked capacity and nothing awaited since.
         self._by_client.add(client_key, at=now)
         site = ipv6_site_key(client_ip)
