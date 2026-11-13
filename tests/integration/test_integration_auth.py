@@ -24,6 +24,17 @@ async def promote_to_admin(engine, climber_id: int):
 # Helpers
 # ---------------------------------------------------------------------------
 
+class _SessionThatMustNotBeUsed:
+    """Fails the request if the handler touches the database."""
+
+    def __getattr__(self, name):
+        raise AssertionError(f"the database must not be used (session.{name})")
+
+
+async def _unused_session():
+    yield _SessionThatMustNotBeUsed()
+
+
 async def signup(client: AsyncClient, username="testuser", password="secret123"):
     return await client.post(f"{BASE}/auth/signup", json={
         "username": username,
@@ -276,6 +287,24 @@ class TestGetAllClimbers:
 # ---------------------------------------------------------------------------
 
 class TestPasswordResetRequest:
+    @pytest.mark.parametrize("username", ["ali\x00ce", "   ", "a\x07b"])
+    async def test_unusable_username_gets_generic_answer_without_database(
+        self, client, username
+    ):
+        """Regression: NUL reached the database and gave a 500."""
+        from db.config import get_session
+        from main import app
+
+        normal = await client.post(
+            f"{BASE}/auth/password-reset/request", json={"username": "nobody"}
+        )
+        app.dependency_overrides[get_session] = _unused_session
+        resp = await client.post(
+            f"{BASE}/auth/password-reset/request", json={"username": username}
+        )
+        assert resp.status_code == 200
+        assert resp.json() == normal.json()
+
     async def test_returns_200_for_existing_user(self, client):
         await signup(client, username="pwreset")
         resp = await client.post(
@@ -355,6 +384,30 @@ class TestCredentialLengthLimits:
         from security.login_throttle import login_throttle
 
         credentials = {"username": "   ", "password": "secret123"}
+        if path == "/auth/token":
+            resp = await client.post(f"{BASE}{path}", data=credentials)
+        else:
+            resp = await client.post(f"{BASE}{path}", json=credentials)
+        assert resp.status_code == 401
+        assert resp.json() == {"detail": "Invalid credentials"}
+        assert len(login_throttle._by_client) == 0
+
+    async def test_signup_rejects_username_with_nul(self, client):
+        resp = await signup(client, username="ali\x00ce")
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("path", ["/auth/login", "/auth/token"])
+    @pytest.mark.parametrize("username", ["ali\x00ce", "a\x1bb"])
+    async def test_control_characters_rejected_before_database_and_throttle(
+        self, client, path, username
+    ):
+        """Regression: NUL in a username reached the database and gave a 500."""
+        from db.config import get_session
+        from main import app
+        from security.login_throttle import login_throttle
+
+        app.dependency_overrides[get_session] = _unused_session
+        credentials = {"username": username, "password": "secret123"}
         if path == "/auth/token":
             resp = await client.post(f"{BASE}{path}", data=credentials)
         else:

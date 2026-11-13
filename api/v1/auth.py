@@ -20,7 +20,12 @@ from schema.auth import (
     PasswordResetConfirm,
     MessageResponse,
 )
-from schema.climber import ClimberCreate, AuthOut, normalize_username
+from schema.climber import (
+    AuthOut,
+    ClimberCreate,
+    is_valid_normalized_username,
+    normalize_username,
+)
 from security.client_address import client_ip
 from security.hashing import (
     hash_password_async,
@@ -43,6 +48,8 @@ from security.rate_limit import (
 from services.email import send_password_reset_email
 
 Session = Annotated[AsyncSession, Depends(get_session)]
+
+PASSWORD_RESET_REQUESTED_MESSAGE = "Om e-postadressen finns i systemet har ett mail skickats."
 
 # RateLimitedRoute enforces the @..._rate_limit decorators below.
 router = APIRouter(prefix="/auth", tags=["auth"], route_class=RateLimitedRoute)
@@ -82,10 +89,11 @@ async def authenticate_user(
     # Stored usernames are normalized at signup, so match that form here and
     # key the throttle on it, otherwise "Alice" and "alice" differ.
     username = normalize_username(username)
-    # Check again after normalizing: trimming can empty a username ("   ") and
-    # lowercasing can lengthen one ("İ" becomes two characters). Signup applies
-    # the same limits to the normalized form, so no stored account matches.
-    if not username or len(username) > USERNAME_MAX_LENGTH:
+    # Check again after normalizing: trimming can empty a username ("   "),
+    # lowercasing can lengthen one ("İ" becomes two characters), and control
+    # characters such as NUL make the database raise. Signup applies the same
+    # rules to the normalized form, so no stored account matches.
+    if not is_valid_normalized_username(username):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     # Reserved up front so concurrent guesses cannot all pass the check; it
     # stays recorded as a failure for this client unless the login succeeds.
@@ -186,6 +194,10 @@ async def request_password_reset(
     session: Session,
 ):
     username = normalize_username(body.username)
+    # No account can have such a name, and NUL would make the database raise;
+    # answer exactly as for an unknown username.
+    if not is_valid_normalized_username(username):
+        return MessageResponse(message=PASSWORD_RESET_REQUESTED_MESSAGE)
     user = await session.scalar(select(Climber).where(Climber.username == username))
 
     if user and user.email:
@@ -215,7 +227,7 @@ async def request_password_reset(
         )
 
     # Always return the same message to avoid revealing whether the email exists
-    return MessageResponse(message="Om e-postadressen finns i systemet har ett mail skickats.")
+    return MessageResponse(message=PASSWORD_RESET_REQUESTED_MESSAGE)
 
 
 @router.post("/password-reset/confirm", response_model=MessageResponse, responses=RATE_LIMITED_RESPONSE)

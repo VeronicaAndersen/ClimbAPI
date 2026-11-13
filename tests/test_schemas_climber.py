@@ -117,3 +117,16 @@ def test_whitespace_only_username_is_rejected(model, username):
     """Regression: it passed min_length=1 and was stored as an empty username."""
     with pytest.raises(ValidationError):
         model(username=username, password="secret123", firstname="A", lastname="B")
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+@pytest.mark.parametrize("username", ["ali\x00ce", "\x00", "a\x1fb", "a\x7fb", "a\tb", "a\x85b"])
+def test_username_with_control_characters_is_rejected(model, username):
+    """Regression: NUL reached the database and surfaced as a 500."""
+    with pytest.raises(ValidationError):
+        model(username=username, password="secret123", firstname="A", lastname="B")
+
+
+def test_username_with_ordinary_unicode_is_accepted():
+    c = ClimberCreate(username="Åsa-Öberg_ü", password="secret123", firstname="A", lastname="B")
+    assert c.username == "åsa-öberg_ü"
