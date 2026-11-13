@@ -23,7 +23,7 @@ from schema.auth import (
 from schema.climber import (
     AuthOut,
     ClimberCreate,
-    contains_control_characters,
+    contains_unstorable_characters,
     is_valid_normalized_username,
     normalize_username,
 )
@@ -234,9 +234,10 @@ async def request_password_reset(
 @router.post("/password-reset/confirm", response_model=MessageResponse, responses=RATE_LIMITED_RESPONSE)
 @password_reset_confirm_rate_limit
 async def confirm_password_reset(request: Request, body: PasswordResetConfirm, session: Session):
-    # No issued token contains control characters, and NUL would make the
-    # database raise: answer as for any invalid token, without a query.
-    if contains_control_characters(body.token):
+    # No issued token contains control characters or lone surrogates, and
+    # either would make the database raise: answer as for any invalid token,
+    # without a query.
+    if contains_unstorable_characters(body.token):
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
     now = datetime.now(tz=timezone.utc)
     reset_token = await session.scalar(

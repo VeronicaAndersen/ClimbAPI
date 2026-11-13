@@ -17,6 +17,20 @@ def contains_control_characters(value: str) -> bool:
     return any(unicodedata.category(char) == "Cc" for char in value)
 
 
+def contains_unstorable_characters(value: str) -> bool:
+    """
+    True if ``value`` has a control character (Cc, e.g. NUL) or a lone
+    surrogate (Cs). The database rejects NUL in text, and a lone surrogate
+    cannot be encoded as UTF-8; both used to surface as a 500.
+    """
+    return any(unicodedata.category(char) in {"Cc", "Cs"} for char in value)
+
+
+# Bidi embedding/override (U+202A-U+202E) and isolate (U+2066-U+2069)
+# controls: they can make text display in a different order than stored.
+_BIDI_CONTROLS = frozenset(map(chr, [*range(0x202A, 0x202F), *range(0x2066, 0x206A)]))
+
+
 # Control (Cc), format (Cf: zero-width characters, bidi overrides such as
 # U+202E) and surrogate (Cs: lone surrogates, not storable as UTF-8)
 # characters. Format characters let two usernames look identical or make one
@@ -63,13 +77,30 @@ def _normalized_username_within_limit(username: str) -> str:
     return normalized
 
 
-def _without_control_characters(value: str | None) -> str | None:
+def _plain_text(value: str | None) -> str | None:
     """
-    Refuse control characters such as NUL in free-text fields: the database
-    rejects NUL in text, which used to surface as a 500 and a DataError log.
+    For email and club: no control characters, lone surrogates or invisible
+    format characters (Cf), none of which belong in an address or club name.
     """
-    if value is not None and contains_control_characters(value):
-        raise ValueError("must not contain control characters")
+    if value is not None and (
+        contains_unstorable_characters(value)
+        or any(unicodedata.category(char) == "Cf" for char in value)
+    ):
+        raise ValueError("must not contain control or invisible formatting characters")
+    return value
+
+
+def _person_name(value: str | None) -> str | None:
+    """
+    For first and last names: no control characters or lone surrogates, and
+    no bidi controls. Other format characters stay allowed, since zero-width
+    joiners (emoji sequences) and non-joiners are legitimate in names.
+    """
+    if value is not None and (
+        contains_unstorable_characters(value)
+        or any(char in _BIDI_CONTROLS for char in value)
+    ):
+        raise ValueError("must not contain control or bidirectional override characters")
     return value
 
 
@@ -101,10 +132,15 @@ class ClimberCreate(BaseModel):
             return v.strip().lower()
         return v
 
-    @field_validator('email', 'firstname', 'lastname', 'club')
+    @field_validator('email', 'club')
     @classmethod
-    def reject_control_characters(cls, v: str | None) -> str | None:
-        return _without_control_characters(v)
+    def reject_hidden_characters(cls, v: str | None) -> str | None:
+        return _plain_text(v)
+
+    @field_validator('firstname', 'lastname')
+    @classmethod
+    def reject_hidden_name_characters(cls, v: str | None) -> str | None:
+        return _person_name(v)
 
 
 class ClimberUpdate(BaseModel):
@@ -135,10 +171,15 @@ class ClimberUpdate(BaseModel):
             return v.strip().lower()
         return v
 
-    @field_validator('email', 'firstname', 'lastname', 'club')
+    @field_validator('email', 'club')
     @classmethod
-    def reject_control_characters(cls, v: str | None) -> str | None:
-        return _without_control_characters(v)
+    def reject_hidden_characters(cls, v: str | None) -> str | None:
+        return _plain_text(v)
+
+    @field_validator('firstname', 'lastname')
+    @classmethod
+    def reject_hidden_name_characters(cls, v: str | None) -> str | None:
+        return _person_name(v)
 
 
 class AdminClimberUpdate(ClimberUpdate):

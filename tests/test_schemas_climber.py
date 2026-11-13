@@ -164,3 +164,43 @@ def test_text_fields_accept_ordinary_text():
         email="Alice@Example.com",
     )
     assert (c.firstname, c.club, c.email) == ("Åsa", "Klätterklubben 08", "alice@example.com")
+
+
+def _climber(model, **fields):
+    data = {"username": "alice", "password": "secret123", "firstname": "A", "lastname": "B"}
+    data.update(fields)
+    return model(**data)
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+@pytest.mark.parametrize("field", ["email", "firstname", "lastname", "club"])
+def test_text_fields_reject_lone_surrogates(model, field):
+    """Regression: a lone surrogate reached the database and gave a 500."""
+    with pytest.raises(ValidationError):
+        _climber(model, **{field: "A\ud800"})
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+@pytest.mark.parametrize("field", ["email", "club"])
+@pytest.mark.parametrize("char", ["\u200b", "\u200d", "\u202e", "\ufeff", "\u2066"])
+def test_email_and_club_reject_format_characters(model, field, char):
+    with pytest.raises(ValidationError):
+        _climber(model, **{field: f"ab{char}c"})
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+@pytest.mark.parametrize("field", ["firstname", "lastname"])
+@pytest.mark.parametrize(
+    "char", ["\u202a", "\u202b", "\u202c", "\u202d", "\u202e", "\u2066", "\u2067", "\u2068", "\u2069"]
+)
+def test_names_reject_bidi_controls(model, field, char):
+    with pytest.raises(ValidationError):
+        _climber(model, **{field: f"An{char}na"})
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+@pytest.mark.parametrize("name", ["Klättrare \U0001F469\u200d\U0001F4BB", "Ann\u200cika", "Liv\u200b"])
+def test_names_keep_other_format_characters(model, name):
+    """Zero-width joiners (emoji sequences) and non-joiners are legitimate in names."""
+    climber = _climber(model, firstname=name, lastname=name)
+    assert climber.firstname == name.strip()

@@ -461,3 +461,30 @@ class TestPasswordResetConfirmControlCharacters:
             },
         )
         assert resp.status_code == 422
+
+
+class TestLoneSurrogatesInTextFields:
+    async def test_signup_rejects_lone_surrogate_in_firstname(self, client):
+        """Regression: it reached the database and gave a 500."""
+        body = (
+            '{"username": "surrogate", "password": "secret123",'
+            ' "firstname": "A\\ud800", "lastname": "B"}'
+        )
+        resp = await client.post(
+            f"{BASE}/auth/signup", content=body, headers={"Content-Type": "application/json"}
+        )
+        assert resp.status_code == 422
+
+    async def test_reset_token_with_lone_surrogate_is_invalid_without_database(self, client):
+        """Regression: it reached the database and gave a 500."""
+        from db.config import get_session
+        from main import app
+
+        app.dependency_overrides[get_session] = _unused_session
+        resp = await client.post(
+            f"{BASE}/auth/password-reset/confirm",
+            content='{"token": "abc\\ud800", "new_password": "newsecret1"}',
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+        assert resp.json() == {"detail": "Invalid or expired reset token"}
