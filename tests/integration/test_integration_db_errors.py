@@ -50,13 +50,22 @@ def _all_logged_text(records) -> str:
 STATEMENT = "SELECT climber.id FROM climber WHERE climber.username = $1"
 
 
+HIDDEN_PARAMETERS_MARKER = "[SQL parameters hidden due to hide_parameters=True]"
+
+
+def _production_like_error() -> IntegrityError:
+    """As the app's engine raises it: parameters hidden, DETAIL still present."""
+    return IntegrityError(
+        STATEMENT,
+        {"username": SECRET_USERNAME},
+        UniqueViolation(f"duplicate key value violates unique constraint\n{DETAIL}"),
+        hide_parameters=True,
+    )
+
+
 class ExplodingSession:
     async def scalar(self, _statement):
-        raise IntegrityError(
-            STATEMENT,
-            {"username": SECRET_USERNAME},
-            UniqueViolation(f'duplicate key value violates unique constraint\n{DETAIL}'),
-        )
+        raise _production_like_error()
 
 
 async def test_dbapi_error_is_generic_500_and_logs_no_row_data(client, caplog):
@@ -87,7 +96,18 @@ async def test_dbapi_error_is_generic_500_and_logs_no_row_data(client, caplog):
     assert "23505" in logged
     # The statement is logged for debugging, with placeholders only.
     assert STATEMENT in logged
-    assert "parameters" not in logged
+    # The error's own text is not logged at all, not even in redacted form:
+    # it would still carry the DETAIL line.
+    assert HIDDEN_PARAMETERS_MARKER not in logged
+    assert SECRET_USERNAME not in logged
+
+
+def test_production_like_error_hides_parameters_but_keeps_detail():
+    """Guards the setup above: hide_parameters alone does not hide DETAIL."""
+    text = str(_production_like_error())
+    assert HIDDEN_PARAMETERS_MARKER in text
+    assert f"'username': '{SECRET_USERNAME}'" not in text
+    assert DETAIL in text
 
 
 class RacingSignupSession:
