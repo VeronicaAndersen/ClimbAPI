@@ -189,6 +189,7 @@ class LoginThrottle:
         # (coarse or frozen clock), it is nudged to the next float, so
         # withdraw_at can never remove another attempt recorded at the same
         # instant. The nudge is nanoseconds, and keeps timestamps ordered.
+        # The clock must be monotonic: the nudge assumes it never goes back.
         now = self._clock()
         if now <= self._last_reservation_at:
             now = math.nextafter(self._last_reservation_at, math.inf)
