@@ -51,15 +51,38 @@ def get_mail_config() -> Optional[ConnectionConfig]:
     )
 
 
+# One rate-limited warning per error type, created on first use.
+_invalid_config_warnings: dict[str, RateLimitedWarning] = {}
+
+
+def _load_mail_config() -> tuple[ConnectionConfig | None, ValueError | None]:
+    """
+    The mail config, or None when unset; plus the error if it is invalid.
+
+    ConnectionConfig raises a pydantic ValidationError (a ValueError) for an
+    invalid value such as MAIL_FROM, and its text includes that value, so
+    callers log only the error type.
+    """
+    try:
+        return get_mail_config(), None
+    except ValueError as error:
+        return None, error
+
+
 def warn_if_mail_not_configured() -> bool:
     """
-    Log one clear warning at startup when mail is not configured.
+    Log one clear warning at startup when mail is not configured or invalid.
 
     The send-time warning is rate-limited and only appears once someone asks
-    for a reset; this makes the misconfiguration visible at deploy time.
-    Returns whether mail is configured.
+    for a reset; this makes the misconfiguration visible at deploy time. An
+    invalid configuration must not stop the API from starting. Returns
+    whether mail is configured.
     """
-    if get_mail_config() is not None:
+    config, error = _load_mail_config()
+    if error is not None:
+        logger.error("Mail configuration is invalid (%s)", type(error).__name__)
+        return False
+    if config is not None:
         return True
     logger.warning(
         "Mail is not configured (MAIL_USERNAME/MAIL_PASSWORD are empty): "
@@ -69,7 +92,14 @@ def warn_if_mail_not_configured() -> bool:
 
 
 async def send_password_reset_email(email: str, token: str, firstname: Optional[str] = None) -> bool:
-    config = get_mail_config()
+    config, error = _load_mail_config()
+    if error is not None:
+        name = type(error).__name__
+        warning = _invalid_config_warnings.setdefault(
+            name, RateLimitedWarning(logger, f"Mail configuration is invalid ({name})")
+        )
+        warning()
+        return False
     if not config:
         _warn_mail_not_configured()
         return False

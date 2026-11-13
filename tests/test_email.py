@@ -160,3 +160,39 @@ async def test_startup_is_quiet_when_mail_is_configured(monkeypatch, caplog):
         async with app.router.lifespan_context(app):
             pass
     assert not [r for r in caplog.records if r.name == "services.email"]
+
+
+BAD_FROM = "not-an-address-from-env"
+
+
+def _invalid_mail_settings(monkeypatch):
+    """Credentials set but MAIL_FROM invalid, so ConnectionConfig raises."""
+    monkeypatch.setattr(email_service.email_settings, "MAIL_USERNAME", "user-placeholder")
+    monkeypatch.setattr(email_service.email_settings, "MAIL_PASSWORD", "password-placeholder")
+    monkeypatch.setattr(email_service.email_settings, "MAIL_FROM", BAD_FROM)
+
+
+async def test_invalid_mail_config_does_not_stop_startup(monkeypatch, caplog):
+    """Regression: the ValidationError escaped the lifespan and the API did not start."""
+    from main import app
+
+    _invalid_mail_settings(monkeypatch)
+    with caplog.at_level(logging.DEBUG):
+        async with app.router.lifespan_context(app):
+            pass
+    assert "Mail configuration is invalid (ValidationError)" in caplog.text
+    assert BAD_FROM not in caplog.text
+
+
+async def test_invalid_mail_config_at_send_returns_false(monkeypatch, capsys, caplog):
+    """Regression: the ValidationError, with MAIL_FROM in its text, escaped send."""
+    _invalid_mail_settings(monkeypatch)
+    with caplog.at_level(logging.DEBUG):
+        sent = await email_service.send_password_reset_email(ADDRESS, TOKEN, "Alice")
+    assert sent is False
+    out = capsys.readouterr()
+    for text in (out.out, out.err, caplog.text):
+        assert BAD_FROM not in text
+        assert TOKEN not in text
+        assert ADDRESS not in text
+    assert "Mail configuration is invalid (ValidationError)" in caplog.text
