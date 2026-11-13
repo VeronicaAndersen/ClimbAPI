@@ -167,6 +167,10 @@ async def get_session() -> AsyncIterator[AsyncSession]:
     except BaseException as exc:
         cancelled = await _close_after_failure(session, exc)
         if cancelled is not None and cancelled is not exc:
+            if isinstance(exc, Exception):
+                # The cancellation replaces the error, which no handler will
+                # see now; record that it happened, by type only.
+                logger.error("Request cancelled during cleanup after %s", type(exc).__name__)
             raise cancelled from None
         if isinstance(exc, asyncio.CancelledError):
             raise exc from None

@@ -421,3 +421,23 @@ def test_cleanup_timeout_setting_must_be_positive(monkeypatch, value):
 def test_cleanup_timeout_setting_default(monkeypatch):
     monkeypatch.delenv("DB_CLEANUP_TIMEOUT_SECONDS", raising=False)
     assert config._cleanup_timeout_from_env() == 10.0
+
+
+
+async def test_cancel_during_cleanup_logs_original_error_type(monkeypatch, caplog):
+    """Regression: the DB error vanished without a trace when cleanup was cancelled."""
+    session = _SlowSession()
+    monkeypatch.setattr(config, "AsyncSessionLocal", lambda: session)
+
+    async def request():
+        async with asynccontextmanager(config.get_session)():
+            raise _integrity_error()
+
+    task = asyncio.create_task(request())
+    await session.rollback_started.wait()
+    task.cancel()
+    with caplog.at_level(logging.DEBUG):
+        await _cancelled_result(task)
+    assert "Request cancelled during cleanup after IntegrityError" in caplog.text
+    assert SECRET not in caplog.text
+    assert "DETAIL" not in caplog.text
