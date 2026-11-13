@@ -1,3 +1,4 @@
+import html
 import logging
 import os
 from typing import Optional
@@ -57,7 +58,10 @@ async def send_password_reset_email(email: str, token: str, firstname: Optional[
         return False
 
     reset_url = f"{email_settings.FRONTEND_URL}/reset-password?token={token}"
-    greeting = f"Hej {firstname}" if firstname else "Hej"
+    # Everything inserted into the HTML is escaped: the first name is user
+    # input, and the URL goes into an attribute as well as the text.
+    greeting = f"Hej {html.escape(firstname)}" if firstname else "Hej"
+    safe_url = html.escape(reset_url, quote=True)
 
     html_content = f"""
     <html>
@@ -68,14 +72,14 @@ async def send_password_reset_email(email: str, token: str, firstname: Optional[
             <p>Du har begärt att återställa ditt lösenord för ditt Greppmästerskaps-konto.</p>
             <p>Klicka på knappen nedan för att välja ett nytt lösenord:</p>
             <p style="text-align: center; margin: 30px 0;">
-                <a href="{reset_url}"
+                <a href="{safe_url}"
                    style="background-color: #505654; color: white; padding: 12px 24px;
                           text-decoration: none; border-radius: 6px; display: inline-block;">
                     Återställ lösenord
                 </a>
             </p>
             <p>Eller kopiera och klistra in denna länk i din webbläsare:</p>
-            <p style="word-break: break-all; color: #666; font-size: 14px;">{reset_url}</p>
+            <p style="word-break: break-all; color: #666; font-size: 14px;">{safe_url}</p>
             <p><strong>Länken är giltig i 1 timme.</strong></p>
             <p>Om du inte begärde detta kan du ignorera detta mail.</p>
             <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">

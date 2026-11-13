@@ -110,3 +110,31 @@ async def test_sends_reset_link_to_recipient(monkeypatch):
     (message,) = _CapturingMail.sent
     assert [r.email for r in message.recipients] == [ADDRESS]
     assert f"https://app.example/reset-password?token={TOKEN}" in message.body
+
+
+async def test_first_name_is_html_escaped(monkeypatch):
+    """Regression: the first name was inserted into the email HTML as is."""
+    monkeypatch.setattr(email_service, "get_mail_config", lambda: object())
+    monkeypatch.setattr(email_service, "FastMail", _CapturingMail)
+    _CapturingMail.sent = []
+    name = '<a href="https://evil.example">Klicka</a><script>x()</script>'
+
+    assert await email_service.send_password_reset_email(ADDRESS, TOKEN, name) is True
+
+    (message,) = _CapturingMail.sent
+    assert "<script>" not in message.body
+    assert 'href="https://evil.example"' not in message.body
+    assert "Hej &lt;a href=&quot;https://evil.example&quot;&gt;Klicka&lt;/a&gt;" in message.body
+
+
+async def test_reset_url_is_escaped_in_html(monkeypatch):
+    monkeypatch.setattr(email_service, "get_mail_config", lambda: object())
+    monkeypatch.setattr(email_service, "FastMail", _CapturingMail)
+    monkeypatch.setattr(email_service.email_settings, "FRONTEND_URL", 'https://a.example/"x')
+    _CapturingMail.sent = []
+
+    assert await email_service.send_password_reset_email(ADDRESS, TOKEN) is True
+
+    (message,) = _CapturingMail.sent
+    assert 'href="https://a.example/"x' not in message.body
+    assert "https://a.example/&quot;x/reset-password?token=" in message.body
