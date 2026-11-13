@@ -71,8 +71,10 @@ class SlidingWindowLog[K: Hashable]:
             return None
         cutoff = now - self.window_seconds
         if timestamps[-1] <= cutoff:
-            # Not reachable while the expiry order holds (the front sweep above
-            # would have dropped it), but never index past the end if it does not.
+            # Reachable after withdraw_at removed the key's newest timestamp:
+            # the key then sits behind keys that expire later, so the front
+            # sweep above has not reached it yet. Drop it here instead of
+            # scanning past the end of its list.
             del self._entries[key]
             self._removed(key)
             return None

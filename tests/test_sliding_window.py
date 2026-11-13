@@ -111,3 +111,37 @@ def test_on_add_called_once_per_new_key():
     clock.now += 61
     log.add("a")  # expired, so created again
     assert added == ["a", "a"]
+
+
+def test_key_left_behind_by_withdraw_at_lingers_then_goes():
+    """
+    After withdraw_at removes a key's newest timestamp, the key sits behind
+    a key that expires later: it still counts until that key expires too.
+    """
+    log, clock, removed = make(window=60.0)
+    log.add("a")  # 1000
+    clock.now = 1020
+    log.add("b")  # 1020
+    clock.now = 1040
+    log.add("a")  # 1040, a moves behind b
+    log.withdraw_at("a", 1040.0)  # a's latest is now 1000, still behind b
+
+    clock.now = 1061  # a has expired, b has not
+    assert log.active_count() == 2  # a lingers behind b
+    assert removed == []
+    assert log.recent("a") is None  # but is dropped as soon as it is read
+    assert removed == ["a"]
+
+
+def test_lingering_key_is_swept_once_keys_ahead_expire():
+    log, clock, removed = make(window=60.0)
+    log.add("a")  # 1000
+    clock.now = 1020
+    log.add("b")  # 1020
+    clock.now = 1040
+    log.add("a")  # 1040
+    log.withdraw_at("a", 1040.0)
+
+    clock.now = 1081  # b has expired as well
+    assert log.active_count() == 0
+    assert sorted(removed) == ["a", "b"]
