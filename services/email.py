@@ -1,7 +1,21 @@
+import html
+import logging
 import os
 from typing import Optional
 
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
+
+from security.rate_limited_warning import RateLimitedWarning
+
+logger = logging.getLogger(__name__)
+
+# Never log the reset link: it contains a live token, and on hosted platforms
+# stdout and logs are readable by more people than the account owner.
+_warn_mail_not_configured = RateLimitedWarning(
+    logger,
+    "Mail is not configured (MAIL_USERNAME/MAIL_PASSWORD); "
+    "password reset email not sent",
+)
 
 
 class EmailSettings:
@@ -37,14 +51,64 @@ def get_mail_config() -> Optional[ConnectionConfig]:
     )
 
 
-async def send_password_reset_email(email: str, token: str, firstname: Optional[str] = None) -> bool:
-    config = get_mail_config()
-    if not config:
-        print(f"[DEV MODE] Password reset link: {email_settings.FRONTEND_URL}/reset-password?token={token}")
+# One rate-limited warning per error type, created on first use.
+_invalid_config_warnings: dict[str, RateLimitedWarning] = {}
+
+
+def _load_mail_config() -> tuple[ConnectionConfig | None, ValueError | None]:
+    """
+    The mail config, or None when unset; plus the error if it is invalid.
+
+    ConnectionConfig raises a pydantic ValidationError (a ValueError) for an
+    invalid value such as MAIL_FROM, and its text includes that value, so
+    callers log only the error type.
+    """
+    try:
+        return get_mail_config(), None
+    except ValueError as error:
+        return None, error
+
+
+def warn_if_mail_not_configured() -> bool:
+    """
+    Log one clear warning at startup when mail is not configured or invalid.
+
+    The send-time warning is rate-limited and only appears once someone asks
+    for a reset; this makes the misconfiguration visible at deploy time. An
+    invalid configuration must not stop the API from starting. Returns
+    whether mail is configured.
+    """
+    config, error = _load_mail_config()
+    if error is not None:
+        logger.error("Mail configuration is invalid (%s)", type(error).__name__)
+        return False
+    if config is not None:
         return True
+    logger.warning(
+        "Mail is not configured (MAIL_USERNAME/MAIL_PASSWORD are empty): "
+        "password reset emails will not be sent"
+    )
+    return False
+
+
+async def send_password_reset_email(email: str, token: str, firstname: Optional[str] = None) -> bool:
+    config, error = _load_mail_config()
+    if error is not None:
+        name = type(error).__name__
+        warning = _invalid_config_warnings.setdefault(
+            name, RateLimitedWarning(logger, f"Mail configuration is invalid ({name})")
+        )
+        warning()
+        return False
+    if not config:
+        _warn_mail_not_configured()
+        return False
 
     reset_url = f"{email_settings.FRONTEND_URL}/reset-password?token={token}"
-    greeting = f"Hej {firstname}" if firstname else "Hej"
+    # Everything inserted into the HTML is escaped: the first name is user
+    # input, and the URL goes into an attribute as well as the text.
+    greeting = f"Hej {html.escape(firstname)}" if firstname else "Hej"
+    safe_url = html.escape(reset_url, quote=True)
 
     html_content = f"""
     <html>
@@ -55,14 +119,14 @@ async def send_password_reset_email(email: str, token: str, firstname: Optional[
             <p>Du har begärt att återställa ditt lösenord för ditt Greppmästerskaps-konto.</p>
             <p>Klicka på knappen nedan för att välja ett nytt lösenord:</p>
             <p style="text-align: center; margin: 30px 0;">
-                <a href="{reset_url}"
+                <a href="{safe_url}"
                    style="background-color: #505654; color: white; padding: 12px 24px;
                           text-decoration: none; border-radius: 6px; display: inline-block;">
                     Återställ lösenord
                 </a>
             </p>
             <p>Eller kopiera och klistra in denna länk i din webbläsare:</p>
-            <p style="word-break: break-all; color: #666; font-size: 14px;">{reset_url}</p>
+            <p style="word-break: break-all; color: #666; font-size: 14px;">{safe_url}</p>
             <p><strong>Länken är giltig i 1 timme.</strong></p>
             <p>Om du inte begärde detta kan du ignorera detta mail.</p>
             <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
@@ -72,17 +136,20 @@ async def send_password_reset_email(email: str, token: str, firstname: Optional[
     </html>
     """
 
-    message = MessageSchema(
-        subject="Återställ ditt lösenord - Grepp",
-        recipients=[email],
-        body=html_content,
-        subtype=MessageType.html,
-    )
-
     try:
+        # Built inside the try: an invalid stored address (e.g. "anna@gmail")
+        # makes MessageSchema raise a ValidationError whose text includes the
+        # address, which must not reach the background-task error log.
+        message = MessageSchema(
+            subject="Återställ ditt lösenord - Grepp",
+            recipients=[email],
+            body=html_content,
+            subtype=MessageType.html,
+        )
         fm = FastMail(config)
         await fm.send_message(message)
         return True
     except Exception as e:
-        print(f"Failed to send email: {e}")
+        # The error text can include the recipient's address; log the type only.
+        logger.error("Failed to send password reset email (%s)", type(e).__name__)
         return False

@@ -10,7 +10,7 @@ from db.models import Climber, Competition, Registration, UserScope
 from schema.climber import ClimberOut, ClimberCreate, ClimberUpdate, AdminClimberUpdate
 from schema.registration import RegistrationWithCompetitionOut
 from security.deps import CurrentUser, AdminUser
-from security.hashing import hash_password
+from security.hashing import hash_password_async
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 
@@ -35,7 +35,7 @@ async def create_climber(payload: ClimberCreate, session: Session):
     await check_email_available(session, payload.email)
 
     climber_data = payload.model_dump(exclude={'password'})
-    climber = Climber(**climber_data, password=hash_password(payload.password))
+    climber = Climber(**climber_data, password=await hash_password_async(payload.password))
     session.add(climber)
 
     try:
@@ -68,7 +68,7 @@ async def update_me(payload: ClimberUpdate, current: CurrentUser, session: Sessi
 
     # Hash password if provided
     if 'password' in updates:
-        updates['password'] = hash_password(updates['password'])
+        updates['password'] = await hash_password_async(updates['password'])
 
     # Apply updates
     for field, value in updates.items():
@@ -111,7 +111,7 @@ async def update_climber(climber_id: int, payload: AdminClimberUpdate, admin: Ad
 
     # Hash password if provided
     if 'password' in updates:
-        updates['password'] = hash_password(updates['password'])
+        updates['password'] = await hash_password_async(updates['password'])
 
     # Validate user scope if provided
     if 'user_scope' in updates:

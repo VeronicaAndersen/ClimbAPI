@@ -1,14 +1,112 @@
+import unicodedata
 from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, constr, field_validator
 
-from schema.auth import TokenPair
+from schema.auth import PASSWORD_MAX_LENGTH, USERNAME_MAX_LENGTH, TokenPair
+
+
+def normalize_username(username: str) -> str:
+    """Canonical form of a username: trimmed and lowercased, as stored."""
+    return username.strip().lower()
+
+
+def contains_control_characters(value: str) -> bool:
+    """True if ``value`` has a control character (Unicode category Cc), e.g. NUL."""
+    return any(unicodedata.category(char) == "Cc" for char in value)
+
+
+def contains_unstorable_characters(value: str) -> bool:
+    """
+    True if ``value`` has a control character (Cc, e.g. NUL) or a lone
+    surrogate (Cs). The database rejects NUL in text, and a lone surrogate
+    cannot be encoded as UTF-8; both used to surface as a 500.
+    """
+    return any(unicodedata.category(char) in {"Cc", "Cs"} for char in value)
+
+
+# Bidi embedding/override (U+202A-U+202E) and isolate (U+2066-U+2069)
+# controls: they can make text display in a different order than stored.
+_BIDI_CONTROLS = frozenset(map(chr, [*range(0x202A, 0x202F), *range(0x2066, 0x206A)]))
+
+
+# Control (Cc), format (Cf: zero-width characters, bidi overrides such as
+# U+202E) and surrogate (Cs: lone surrogates, not storable as UTF-8)
+# characters. Format characters let two usernames look identical or make one
+# display as something else.
+_FORBIDDEN_USERNAME_CATEGORIES = frozenset({"Cc", "Cf", "Cs"})
+
+
+def contains_forbidden_username_characters(value: str) -> bool:
+    """True if ``value`` has a control, invisible format or surrogate character."""
+    return any(
+        unicodedata.category(char) in _FORBIDDEN_USERNAME_CATEGORIES for char in value
+    )
+
+
+def is_valid_normalized_username(username: str) -> bool:
+    """
+    Whether a normalized username could belong to an account: signup rejects
+    the rest, so lookups can refuse them without touching the database.
+    """
+    return (
+        bool(username)
+        and len(username) <= USERNAME_MAX_LENGTH
+        and not contains_forbidden_username_characters(username)
+    )
+
+
+def _normalized_username_within_limit(username: str) -> str:
+    """
+    Normalize and re-check. The raw-length checks are not enough: trimming
+    can empty a string ("   "), and lowercasing can lengthen one ("İ" becomes
+    two characters). Control characters such as NUL are refused too (the
+    database rejects NUL in text, which used to surface as a 500), as are
+    invisible format characters and lone surrogates.
+    """
+    normalized = normalize_username(username)
+    if not normalized:
+        raise ValueError("username must not be empty or only whitespace")
+    if len(normalized) > USERNAME_MAX_LENGTH:
+        raise ValueError(f"username must be at most {USERNAME_MAX_LENGTH} characters")
+    if contains_forbidden_username_characters(normalized):
+        raise ValueError(
+            "username must not contain control or invisible formatting characters"
+        )
+    return normalized
+
+
+def _plain_text(value: str | None) -> str | None:
+    """
+    For email and club: no control characters, lone surrogates or invisible
+    format characters (Cf), none of which belong in an address or club name.
+    """
+    if value is not None and (
+        contains_unstorable_characters(value)
+        or any(unicodedata.category(char) == "Cf" for char in value)
+    ):
+        raise ValueError("must not contain control or invisible formatting characters")
+    return value
+
+
+def _person_name(value: str | None) -> str | None:
+    """
+    For first and last names: no control characters or lone surrogates, and
+    no bidi controls. Other format characters stay allowed, since zero-width
+    joiners (emoji sequences) and non-joiners are legitimate in names.
+    """
+    if value is not None and (
+        contains_unstorable_characters(value)
+        or any(char in _BIDI_CONTROLS for char in value)
+    ):
+        raise ValueError("must not contain control or bidirectional override characters")
+    return value
 
 
 class ClimberCreate(BaseModel):
-    username: constr(min_length=1, max_length=200)
-    password: constr(min_length=6, max_length=1024)
+    username: constr(min_length=1, max_length=USERNAME_MAX_LENGTH)
+    password: constr(min_length=6, max_length=PASSWORD_MAX_LENGTH)
     email: Optional[str] = None
     firstname: str
     lastname: str
@@ -18,7 +116,7 @@ class ClimberCreate(BaseModel):
     @classmethod
     def trim_lowercase_username(cls, v: str) -> str:
         """Trim and lowercase username."""
-        return v.strip().lower() if v else v
+        return _normalized_username_within_limit(v) if v else v
 
     @field_validator('firstname', 'lastname')
     @classmethod
@@ -34,10 +132,20 @@ class ClimberCreate(BaseModel):
             return v.strip().lower()
         return v
 
+    @field_validator('email', 'club')
+    @classmethod
+    def reject_hidden_characters(cls, v: str | None) -> str | None:
+        return _plain_text(v)
+
+    @field_validator('firstname', 'lastname')
+    @classmethod
+    def reject_hidden_name_characters(cls, v: str | None) -> str | None:
+        return _person_name(v)
+
 
 class ClimberUpdate(BaseModel):
-    username: Optional[constr(min_length=1, max_length=200)] = None
-    password: Optional[constr(min_length=6, max_length=1024)] = None
+    username: Optional[constr(min_length=1, max_length=USERNAME_MAX_LENGTH)] = None
+    password: Optional[constr(min_length=6, max_length=PASSWORD_MAX_LENGTH)] = None
     email: Optional[str] = None
     firstname: Optional[str] = None
     lastname: Optional[str] = None
@@ -47,7 +155,7 @@ class ClimberUpdate(BaseModel):
     @classmethod
     def trim_lowercase_username(cls, v: Optional[str]) -> Optional[str]:
         """Trim and lowercase username."""
-        return v.strip().lower() if v else v
+        return _normalized_username_within_limit(v) if v else v
 
     @field_validator('firstname', 'lastname')
     @classmethod
@@ -62,6 +170,16 @@ class ClimberUpdate(BaseModel):
         if v:
             return v.strip().lower()
         return v
+
+    @field_validator('email', 'club')
+    @classmethod
+    def reject_hidden_characters(cls, v: str | None) -> str | None:
+        return _plain_text(v)
+
+    @field_validator('firstname', 'lastname')
+    @classmethod
+    def reject_hidden_name_characters(cls, v: str | None) -> str | None:
+        return _person_name(v)
 
 
 class AdminClimberUpdate(ClimberUpdate):

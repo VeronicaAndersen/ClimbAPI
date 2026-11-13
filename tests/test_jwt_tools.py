@@ -3,7 +3,7 @@ import pytest
 import jwt as pyjwt
 
 from security.jwt_tools import create_access_token, create_refresh_token, decode_token
-from schema.setting import settings
+from schema.setting import JWT_ALG, settings
 
 
 class TestCreateAccessToken:
@@ -67,7 +67,7 @@ class TestCreateRefreshToken:
         return pyjwt.decode(
             token,
             settings.JWT_SECRET,
-            algorithms=[settings.JWT_ALG],
+            algorithms=[JWT_ALG],
             options={"verify_exp": False},
         )
 
@@ -133,7 +133,7 @@ class TestDecodeToken:
     def test_wrong_secret_raises(self):
         token = create_access_token("u")
         with pytest.raises(pyjwt.InvalidSignatureError):
-            pyjwt.decode(token, "wrong-secret", algorithms=[settings.JWT_ALG])
+            pyjwt.decode(token, "wrong-secret", algorithms=[JWT_ALG])
 
     def test_tampered_token_raises(self):
         token = create_access_token("u")

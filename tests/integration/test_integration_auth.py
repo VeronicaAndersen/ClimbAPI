@@ -24,6 +24,17 @@ async def promote_to_admin(engine, climber_id: int):
 # Helpers
 # ---------------------------------------------------------------------------
 
+class _SessionThatMustNotBeUsed:
+    """Fails the request if the handler touches the database."""
+
+    def __getattr__(self, name):
+        raise AssertionError(f"the database must not be used (session.{name})")
+
+
+async def _unused_session():
+    yield _SessionThatMustNotBeUsed()
+
+
 async def signup(client: AsyncClient, username="testuser", password="secret123"):
     return await client.post(f"{BASE}/auth/signup", json={
         "username": username,
@@ -119,13 +130,20 @@ class TestLogin:
             "username": "MIXEDCASE",
             "password": "secret123",
         })
-        # The login endpoint itself doesn't lowercase — signup stored "mixedcase"
-        # Lowercase the username in the test just as the frontend does
-        resp2 = await client.post(f"{BASE}/auth/login", json={
-            "username": "mixedcase",
-            "password": "secret123",
-        })
-        assert resp2.status_code == 200
+        assert resp.status_code == 200
+
+    async def test_login_trims_username_whitespace(self, client):
+        await signup(client, username="spaced")
+        resp = await login(client, username="  Spaced ")
+        assert resp.status_code == 200
+
+    async def test_token_endpoint_normalizes_username(self, client):
+        await signup(client, username="formuser")
+        resp = await client.post(
+            f"{BASE}/auth/token",
+            data={"username": " FormUser", "password": "secret123"},
+        )
+        assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -212,21 +230,21 @@ class TestGetClimberById:
 
         resp = await client.get(
             f"{BASE}/climber/{owner_id}",
-            headers={"Authorization": f"******"},
+            headers={"Authorization": f"Bearer {owner_token}"},
         )
         assert resp.status_code == 200
         assert resp.json()["email"] == "private@example.com"
 
         resp = await client.get(
             f"{BASE}/climber/{other_id}",
-            headers={"Authorization": f"******"},
+            headers={"Authorization": f"Bearer {owner_token}"},
         )
         assert resp.status_code == 403
 
         await promote_to_admin(engine, owner_id)
         resp = await client.get(
             f"{BASE}/climber/{other_id}",
-            headers={"Authorization": f"******"},
+            headers={"Authorization": f"Bearer {owner_token}"},
         )
         assert resp.status_code == 200
         assert resp.json()["username"] == "other"
@@ -269,6 +287,24 @@ class TestGetAllClimbers:
 # ---------------------------------------------------------------------------
 
 class TestPasswordResetRequest:
+    @pytest.mark.parametrize("username", ["ali\x00ce", "   ", "a\x07b", "ad\u200bmin"])
+    async def test_unusable_username_gets_generic_answer_without_database(
+        self, client, username
+    ):
+        """Regression: NUL reached the database and gave a 500."""
+        from db.config import get_session
+        from main import app
+
+        normal = await client.post(
+            f"{BASE}/auth/password-reset/request", json={"username": "nobody"}
+        )
+        app.dependency_overrides[get_session] = _unused_session
+        resp = await client.post(
+            f"{BASE}/auth/password-reset/request", json={"username": username}
+        )
+        assert resp.status_code == 200
+        assert resp.json() == normal.json()
+
     async def test_returns_200_for_existing_user(self, client):
         await signup(client, username="pwreset")
         resp = await client.post(
@@ -284,3 +320,171 @@ class TestPasswordResetRequest:
         )
         assert resp.status_code == 200
         assert "mail" in resp.json()["message"]
+
+
+# ---------------------------------------------------------------------------
+# Input size limits on login and password reset
+# ---------------------------------------------------------------------------
+
+class TestCredentialLengthLimits:
+    async def test_login_rejects_oversized_username(self, client):
+        resp = await login(client, username="u" * 201)
+        assert resp.status_code == 422
+
+    async def test_login_rejects_oversized_password(self, client):
+        resp = await login(client, password="p" * 1025)
+        assert resp.status_code == 422
+
+    async def test_login_accepts_maximum_lengths(self, client):
+        resp = await login(client, username="u" * 200, password="p" * 1024)
+        assert resp.status_code == 401
+
+    @pytest.mark.parametrize(
+        ("username", "password"),
+        [("u" * 201, "secret123"), ("testuser", "p" * 1025)],
+    )
+    async def test_token_rejects_oversized_input_without_throttling(
+        self, client, username, password
+    ):
+        from security.login_throttle import login_throttle
+
+        resp = await client.post(
+            f"{BASE}/auth/token", data={"username": username, "password": password}
+        )
+        assert resp.status_code == 401
+        assert resp.json() == {"detail": "Invalid credentials"}
+        assert len(login_throttle._by_client) == 0
+        assert len(login_throttle._by_username) == 0
+
+    @pytest.mark.parametrize("path", ["/auth/login", "/auth/token"])
+    async def test_username_too_long_after_lowercasing_is_rejected_without_throttling(
+        self, client, path
+    ):
+        """Regression: "İ" lowercases to two characters, doubling the length."""
+        from security.login_throttle import login_throttle
+
+        username = "İ" * 200
+        credentials = {"username": username, "password": "secret123"}
+        if path == "/auth/token":
+            resp = await client.post(f"{BASE}{path}", data=credentials)
+        else:
+            resp = await client.post(f"{BASE}{path}", json=credentials)
+        assert resp.status_code == 401
+        assert resp.json() == {"detail": "Invalid credentials"}
+        assert len(login_throttle._by_client) == 0
+
+    async def test_signup_rejects_whitespace_only_username(self, client):
+        resp = await signup(client, username="   ")
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("path", ["/auth/login", "/auth/token"])
+    async def test_whitespace_only_username_is_rejected_without_throttling(
+        self, client, path
+    ):
+        from security.login_throttle import login_throttle
+
+        credentials = {"username": "   ", "password": "secret123"}
+        if path == "/auth/token":
+            resp = await client.post(f"{BASE}{path}", data=credentials)
+        else:
+            resp = await client.post(f"{BASE}{path}", json=credentials)
+        assert resp.status_code == 401
+        assert resp.json() == {"detail": "Invalid credentials"}
+        assert len(login_throttle._by_client) == 0
+
+    async def test_signup_rejects_username_with_nul(self, client):
+        resp = await signup(client, username="ali\x00ce")
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("path", ["/auth/login", "/auth/token"])
+    @pytest.mark.parametrize("username", ["ali\x00ce", "a\x1bb", "ad\u200bmin", "\u202eadmin"])
+    async def test_control_characters_rejected_before_database_and_throttle(
+        self, client, path, username
+    ):
+        """Regression: NUL in a username reached the database and gave a 500."""
+        from db.config import get_session
+        from main import app
+        from security.login_throttle import login_throttle
+
+        app.dependency_overrides[get_session] = _unused_session
+        credentials = {"username": username, "password": "secret123"}
+        if path == "/auth/token":
+            resp = await client.post(f"{BASE}{path}", data=credentials)
+        else:
+            resp = await client.post(f"{BASE}{path}", json=credentials)
+        assert resp.status_code == 401
+        assert resp.json() == {"detail": "Invalid credentials"}
+        assert len(login_throttle._by_client) == 0
+
+    async def test_signup_rejects_username_too_long_after_lowercasing(self, client):
+        resp = await signup(client, username="İ" * 200)
+        assert resp.status_code == 422
+
+    async def test_signup_accepts_username_at_limit_after_lowercasing(self, client):
+        resp = await signup(client, username="İ" * 100)
+        assert resp.status_code == 201
+        assert (await login(client, username="İ" * 100)).status_code == 200
+
+    async def test_password_reset_rejects_oversized_username(self, client):
+        resp = await client.post(
+            f"{BASE}/auth/password-reset/request", json={"username": "u" * 201}
+        )
+        assert resp.status_code == 422
+
+
+class TestPasswordResetConfirmControlCharacters:
+    async def test_nul_token_is_invalid_without_database(self, client):
+        """Regression: NUL in the token reached the database and gave a 500."""
+        from db.config import get_session
+        from main import app
+
+        normal = await client.post(
+            f"{BASE}/auth/password-reset/confirm",
+            json={"token": "no-such-token", "new_password": "newsecret1"},
+        )
+        app.dependency_overrides[get_session] = _unused_session
+        resp = await client.post(
+            f"{BASE}/auth/password-reset/confirm",
+            json={"token": "abc\x00def", "new_password": "newsecret1"},
+        )
+        assert resp.status_code == normal.status_code == 400
+        assert resp.json() == normal.json()
+
+    async def test_signup_rejects_nul_in_firstname(self, client):
+        resp = await client.post(
+            f"{BASE}/auth/signup",
+            json={
+                "username": "nulname",
+                "password": "secret123",
+                "firstname": "A\x00",
+                "lastname": "B",
+            },
+        )
+        assert resp.status_code == 422
+
+
+class TestLoneSurrogatesInTextFields:
+    async def test_signup_rejects_lone_surrogate_in_firstname(self, client):
+        """Regression: it reached the database and gave a 500."""
+        body = (
+            '{"username": "surrogate", "password": "secret123",'
+            ' "firstname": "A\\ud800", "lastname": "B"}'
+        )
+        resp = await client.post(
+            f"{BASE}/auth/signup", content=body, headers={"Content-Type": "application/json"}
+        )
+        assert resp.status_code == 422
+
+    async def test_reset_token_with_lone_surrogate_is_invalid_without_database(self, client):
+        """Regression: it reached the database and gave a 500."""
+        from db.config import get_session
+        from main import app
+
+        app.dependency_overrides[get_session] = _unused_session
+        resp = await client.post(
+            f"{BASE}/auth/password-reset/confirm",
+            content='{"token": "abc\\ud800", "new_password": "newsecret1"}',
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+        assert resp.json() == {"detail": "Invalid or expired reset token"}

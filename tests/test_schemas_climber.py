@@ -103,3 +103,104 @@ class TestAdminClimberUpdate:
     def test_can_set_climber_scope(self):
         c = AdminClimberUpdate(user_scope="climber")
         assert c.user_scope == "climber"
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+def test_username_length_is_checked_after_lowercasing(model):
+    with pytest.raises(ValidationError):
+        model(username="İ" * 200, password="secret123", firstname="A", lastname="B")
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+@pytest.mark.parametrize("username", [" ", "   ", "\t\n"])
+def test_whitespace_only_username_is_rejected(model, username):
+    """Regression: it passed min_length=1 and was stored as an empty username."""
+    with pytest.raises(ValidationError):
+        model(username=username, password="secret123", firstname="A", lastname="B")
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+@pytest.mark.parametrize("username", ["ali\x00ce", "\x00", "a\x1fb", "a\x7fb", "a\tb", "a\x85b"])
+def test_username_with_control_characters_is_rejected(model, username):
+    """Regression: NUL reached the database and surfaced as a 500."""
+    with pytest.raises(ValidationError):
+        model(username=username, password="secret123", firstname="A", lastname="B")
+
+
+def test_username_with_ordinary_unicode_is_accepted():
+    c = ClimberCreate(username="Åsa-Öberg_ü", password="secret123", firstname="A", lastname="B")
+    assert c.username == "åsa-öberg_ü"
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+@pytest.mark.parametrize(
+    "username",
+    ["ad\u200bmin", "\u202eadmin", "ad\u200dmin", "\ufeffadmin", "ad\u2066min", "a\ud800b"],
+)
+def test_username_with_format_or_surrogate_characters_is_rejected(model, username):
+    """Regression: zero-width and bidi characters allowed look-alike usernames."""
+    with pytest.raises(ValidationError):
+        model(username=username, password="secret123", firstname="A", lastname="B")
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+@pytest.mark.parametrize("field", ["email", "firstname", "lastname", "club"])
+@pytest.mark.parametrize("value", ["a\x00b", "a\x1bb"])
+def test_text_fields_reject_control_characters(model, field, value):
+    """Regression: NUL in these fields reached the database and gave a 500."""
+    data = {"username": "alice", "password": "secret123", "firstname": "A", "lastname": "B"}
+    data[field] = value
+    with pytest.raises(ValidationError):
+        model(**data)
+
+
+def test_text_fields_accept_ordinary_text():
+    c = ClimberCreate(
+        username="alice",
+        password="secret123",
+        firstname="Åsa",
+        lastname="Öberg-Lind",
+        club="Klätterklubben 08",
+        email="Alice@Example.com",
+    )
+    assert (c.firstname, c.club, c.email) == ("Åsa", "Klätterklubben 08", "alice@example.com")
+
+
+def _climber(model, **fields):
+    data = {"username": "alice", "password": "secret123", "firstname": "A", "lastname": "B"}
+    data.update(fields)
+    return model(**data)
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+@pytest.mark.parametrize("field", ["email", "firstname", "lastname", "club"])
+def test_text_fields_reject_lone_surrogates(model, field):
+    """Regression: a lone surrogate reached the database and gave a 500."""
+    with pytest.raises(ValidationError):
+        _climber(model, **{field: "A\ud800"})
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+@pytest.mark.parametrize("field", ["email", "club"])
+@pytest.mark.parametrize("char", ["\u200b", "\u200d", "\u202e", "\ufeff", "\u2066"])
+def test_email_and_club_reject_format_characters(model, field, char):
+    with pytest.raises(ValidationError):
+        _climber(model, **{field: f"ab{char}c"})
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+@pytest.mark.parametrize("field", ["firstname", "lastname"])
+@pytest.mark.parametrize(
+    "char", ["\u202a", "\u202b", "\u202c", "\u202d", "\u202e", "\u2066", "\u2067", "\u2068", "\u2069"]
+)
+def test_names_reject_bidi_controls(model, field, char):
+    with pytest.raises(ValidationError):
+        _climber(model, **{field: f"An{char}na"})
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+@pytest.mark.parametrize("name", ["Klättrare \U0001F469\u200d\U0001F4BB", "Ann\u200cika", "Liv\u200b"])
+def test_names_keep_other_format_characters(model, name):
+    """Zero-width joiners (emoji sequences) and non-joiners are legitimate in names."""
+    climber = _climber(model, firstname=name, lastname=name)
+    assert climber.firstname == name.strip()
