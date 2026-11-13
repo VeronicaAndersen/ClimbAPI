@@ -237,7 +237,9 @@ class LoginThrottle:
             reservation.username, reservation.client_ip, reservation.at
         )
 
-    def _withdraw_prefix_reservation(self, username: str, client_ip: str, at: float) -> None:
+    def _withdraw_prefix_reservation(
+        self, username: str, client_ip: str, at: float
+    ) -> None:
         site = ipv6_site_key(client_ip)
         if site is not None:
             self._by_prefix.withdraw_at((username, site), at)
@@ -250,7 +252,8 @@ class LoginThrottle:
 
     def _count_client_key(self, key: tuple[str, str]) -> None:
         client_ip = key[1]
-        self._usernames_per_client[client_ip] = self._usernames_per_client.get(client_ip, 0) + 1
+        count = self._usernames_per_client.get(client_ip, 0)
+        self._usernames_per_client[client_ip] = count + 1
 
     def _forget_client_key(self, key: tuple[str, str]) -> None:
         client_ip = key[1]
@@ -278,7 +281,9 @@ class LoginThrottle:
         waits.extend(self._prefix_waits(username, client_ip))
         return max(waits) if waits else None
 
-    def _known_key_waits(self, username: str, client_failures: list[float]) -> list[int]:
+    def _known_key_waits(
+        self, username: str, client_failures: list[float]
+    ) -> list[int]:
         """Limits for a (username, client) pair that has recent failures."""
         waits: list[int] = []
         if len(client_failures) >= self.max_failures:
@@ -329,7 +334,8 @@ class LoginThrottle:
         """Limits for a (username, client) pair with no recent failures."""
         waits: list[int] = []
         if (
-            self._usernames_per_client.get(client_ip, 0) >= self.max_usernames_per_client
+            self._usernames_per_client.get(client_ip, 0)
+            >= self.max_usernames_per_client
             and self._under_pressure()
         ):
             self._warn_client_cap()

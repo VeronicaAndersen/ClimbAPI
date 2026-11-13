@@ -27,7 +27,9 @@ AsyncSessionLocal = async_sessionmaker(
     class_=AsyncSession
 )
 
-async def _cleanup_after_error(step: Awaitable[None], name: str, original: Exception) -> None:
+async def _cleanup_after_error(
+    step: Awaitable[None], name: str, original: Exception
+) -> None:
     """
     Run a rollback or close after a request failed, without masking the error.
 
