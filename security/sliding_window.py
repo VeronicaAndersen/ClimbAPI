@@ -10,9 +10,16 @@ class SlidingWindowLog[K: Hashable]:
     Attempt timestamps per key within a sliding window, bounded in size.
 
     Keys are kept ordered by their latest timestamp, oldest first. The clock
-    is monotonic, so the first key is always the next to expire, and dropping
-    expired keys only ever looks at the front: amortized O(1) per call, no
-    matter how many keys are tracked.
+    is monotonic, so the first key is normally the next to expire, and
+    dropping expired keys only ever looks at the front: amortized O(1) per
+    call, no matter how many keys are tracked.
+
+    ``withdraw_at`` can remove a key's newest timestamp and leave it further
+    back than its new latest timestamp says. That is safe: ``recent`` drops
+    such a key on access once it has expired, and otherwise it lingers only
+    until the keys ahead of it expire, at most by the gap between its old and
+    new latest timestamp. Meanwhile it still counts toward capacity, so
+    capacity waits and counts can only err on the long side, never short.
 
     Timestamps are short lists rather than deques: a deque costs about 1 KB
     even when nearly empty, which matters with hundreds of thousands of keys.
@@ -95,8 +102,14 @@ class SlidingWindowLog[K: Hashable]:
         oldest = next(iter(self._entries.values()))
         return self._seconds_until(oldest[-1])
 
-    def add(self, key: K) -> bool:
-        """Record an attempt now; False if the log is full of active keys."""
+    def add(self, key: K, at: float | None = None) -> bool:
+        """
+        Record an attempt; False if the log is full of active keys.
+
+        ``at`` is the timestamp to record (default: now). Pass the value from
+        one clock read when the caller must later withdraw exactly this
+        attempt; it must not be earlier than the key's existing timestamps.
+        """
         timestamps = self.recent(key)
         if timestamps is None:
             if self.is_full():
@@ -106,7 +119,7 @@ class SlidingWindowLog[K: Hashable]:
                 self._on_add(key)
         else:
             self._entries.move_to_end(key)
-        timestamps.append(self._clock())
+        timestamps.append(self._clock() if at is None else at)
         if len(timestamps) > self.max_per_key:
             del timestamps[0]
         return True
@@ -115,30 +128,29 @@ class SlidingWindowLog[K: Hashable]:
         if self._entries.pop(key, None) is not None:
             self._removed(key)
 
-    def withdraw_one(self, key: K) -> None:
+    def withdraw_at(self, key: K, at: float) -> None:
         """
-        Take one attempt off ``key``'s count, e.g. a reservation handed back.
+        Remove the attempt recorded at ``at`` for ``key``, e.g. a reservation.
 
-        The oldest timestamp is dropped, not the newest. That keeps the key's
-        latest timestamp, and so its place in the expiry order, unchanged:
-        dropping the newest would leave the key behind keys that expire later,
-        and the front-only sweep would then miss it. The cost is that the
-        remaining count may expire a little later than exact, never earlier.
-
-        Expired timestamps are pruned first; otherwise an attempt that expired
-        while the request was in flight would be withdrawn instead of the
-        reservation, which would then stay counted for another full window.
+        Removes exactly that timestamp, so other attempts, older or newer,
+        keep their own expiry. A no-op if it has already expired or the key
+        is gone. Expired timestamps are pruned first.
         """
         # recent() sweeps expired keys and prunes this key's old timestamps;
         # the key may be gone afterwards.
         timestamps = self.recent(key)
         if timestamps is None:
             return
-        if len(timestamps) == 1:
+        # Search from the end: a reservation is usually the newest entry.
+        for index in range(len(timestamps) - 1, -1, -1):
+            if timestamps[index] == at:
+                del timestamps[index]
+                break
+        else:
+            return
+        if not timestamps:
             del self._entries[key]
             self._removed(key)
-            return
-        del timestamps[0]
 
     def clear(self) -> None:
         self._entries.clear()

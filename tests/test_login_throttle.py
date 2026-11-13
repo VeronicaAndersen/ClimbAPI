@@ -2,7 +2,7 @@
 
 import logging
 
-from security.login_throttle import LoginThrottle
+from security.login_throttle import LoginThrottle, Reservation
 
 IP = "198.51.100.1"
 OTHER_IP = "203.0.113.9"
@@ -32,11 +32,23 @@ def make(
     return throttle, clock
 
 
+def allowed(result) -> bool:
+    return isinstance(result, Reservation)
+
+
+def blocked(result) -> bool:
+    return isinstance(result, int)
+
+
+def ok(result) -> Reservation:
+    assert isinstance(result, Reservation), result
+    return result
+
+
 def fail(throttle, username="alice", ip=IP, times=1):
     """Failed attempts, as the login endpoint reports them."""
     for _ in range(times):
-        assert throttle.acquire(username, ip) is None
-        throttle.failed(username, ip)
+        throttle.failed(ok(throttle.acquire(username, ip)))
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +58,7 @@ def fail(throttle, username="alice", ip=IP, times=1):
 def test_allows_attempts_below_limit():
     throttle, _ = make()
     fail(throttle, times=2)
-    assert throttle.acquire("alice", IP) is None
+    assert allowed(throttle.acquire("alice", IP))
 
 
 def test_blocks_at_limit_with_retry_after():
@@ -60,16 +72,16 @@ def test_blocked_attempt_is_not_recorded():
     throttle, clock = make()
     fail(throttle, times=3)
     for _ in range(5):
-        assert throttle.acquire("alice", IP) is not None
+        assert blocked(throttle.acquire("alice", IP))
     clock.now += 60
-    assert throttle.acquire("alice", IP) is None
+    assert allowed(throttle.acquire("alice", IP))
 
 
 def test_failures_expire_after_window():
     throttle, clock = make()
     fail(throttle, times=3)
     clock.now += 60
-    assert throttle.acquire("alice", IP) is None
+    assert allowed(throttle.acquire("alice", IP))
 
 
 def test_sliding_window_releases_oldest_failure_first():
@@ -78,39 +90,39 @@ def test_sliding_window_releases_oldest_failure_first():
     clock.now += 30
     fail(throttle, times=2)
     clock.now += 31
-    assert throttle.acquire("alice", IP) is None
+    assert allowed(throttle.acquire("alice", IP))
 
 
 def test_success_is_not_counted_as_failure():
     """Regression: correct logins must not use up the failure budget."""
     throttle, _ = make()
     for _ in range(10):
-        assert throttle.acquire("alice", IP) is None
-        throttle.succeeded("alice", IP)
+        reservation = ok(throttle.acquire("alice", IP))
+        throttle.succeeded(reservation)
 
 
 def test_success_clears_client_failures():
     throttle, _ = make()
     fail(throttle, times=2)
-    assert throttle.acquire("alice", IP) is None
-    throttle.succeeded("alice", IP)
+    reservation = ok(throttle.acquire("alice", IP))
+    throttle.succeeded(reservation)
     fail(throttle, times=3)
-    assert throttle.acquire("alice", IP) is not None
+    assert blocked(throttle.acquire("alice", IP))
 
 
 def test_failures_on_one_ip_do_not_block_another_ip():
     """Regression: an attacker must not be able to lock out the real user."""
     throttle, _ = make()
     fail(throttle, ip=OTHER_IP, times=3)
-    assert throttle.acquire("alice", OTHER_IP) is not None
-    assert throttle.acquire("alice", IP) is None
+    assert blocked(throttle.acquire("alice", OTHER_IP))
+    assert allowed(throttle.acquire("alice", IP))
 
 
 def test_username_is_normalized():
     throttle, _ = make()
     for name in ("Alice", " alice", "ALICE"):
         fail(throttle, username=name)
-    assert throttle.acquire("alice", IP) is not None
+    assert blocked(throttle.acquire("alice", IP))
 
 
 def test_disabled_never_blocks():
@@ -121,17 +133,17 @@ def test_disabled_never_blocks():
 def test_release_withdraws_only_the_newest_reservation():
     throttle, _ = make()
     fail(throttle, times=2)
-    assert throttle.acquire("alice", IP) is None
-    throttle.release("alice", IP)
+    reservation = ok(throttle.acquire("alice", IP))
+    throttle.release(reservation)
     # Two failures remain, so one more attempt is allowed before the block.
     fail(throttle)
-    assert throttle.acquire("alice", IP) is not None
+    assert blocked(throttle.acquire("alice", IP))
 
 
 def test_release_of_only_reservation_forgets_the_key():
     throttle, _ = make()
-    assert throttle.acquire("alice", IP) is None
-    throttle.release("alice", IP)
+    reservation = ok(throttle.acquire("alice", IP))
+    throttle.release(reservation)
     assert len(throttle._by_client) == 0
 
 
@@ -146,31 +158,37 @@ def test_release_then_expiry_behind_active_keys_does_not_crash():
     clock.now += 150
     fail(throttle, username="bob")                    # t=1150
     clock.now += 50
-    assert throttle.acquire("alice", IP) is None      # t=1200, then a DB error
-    throttle.release("alice", IP)
+    reservation = ok(throttle.acquire("alice", IP))   # t=1200, then a DB error
+    throttle.release(reservation)
 
     clock.now = 1000 + 901  # alice's real failure has expired, bob's has not
-    assert throttle.acquire("alice", IP) is None
+    assert allowed(throttle.acquire("alice", IP))
     assert throttle._by_client.recent(("alice", IP)) is not None
     assert throttle._usernames_per_client == {IP: 2}
 
     clock.now = 1901 + 901  # everything, including that last attempt, expired
-    assert throttle.acquire("carol", IP) is None
+    assert allowed(throttle.acquire("carol", IP))
     assert ("alice", IP) not in throttle._by_client
     assert ("bob", IP) not in throttle._by_client
     assert throttle._usernames_per_client == {IP: 1}
 
 
-def test_release_keeps_expiry_order():
+def test_release_leaves_exact_count_and_stale_key_is_dropped():
+    """
+    Withdrawing the newest timestamp can leave a key further back than its
+    latest timestamp says; counts stay exact and the key goes once expired.
+    """
     throttle, clock = make(window=900.0)
-    fail(throttle, username="alice")
+    fail(throttle, username="alice")  # t=1000
     clock.now += 150
-    fail(throttle, username="bob")
+    fail(throttle, username="bob")  # t=1150
     clock.now += 50
-    assert throttle.acquire("alice", IP) is None
-    throttle.release("alice", IP)
-    latest = [ts[-1] for ts in throttle._by_client._entries.values()]
-    assert latest == sorted(latest)
+    reservation = ok(throttle.acquire("alice", IP))  # t=1200
+    throttle.release(reservation)
+    assert throttle._by_client.recent(("alice", IP)) == [1000.0]
+    clock.now = 1000 + 900  # alice's failure expires, bob (ahead of it) has not
+    assert throttle._by_client.recent(("alice", IP)) is None
+    assert throttle._usernames_per_client == {IP: 1}
 
 
 def test_release_after_old_failure_expired_frees_the_client_slot():
@@ -181,9 +199,9 @@ def test_release_after_old_failure_expired_frees_the_client_slot():
     throttle, clock = make(window=60.0)
     fail(throttle)  # t=1000
     clock.now = 1050
-    assert throttle.acquire("alice", IP) is None  # reservation
+    reservation = ok(throttle.acquire("alice", IP))
     clock.now = 1070  # the t=1000 failure has expired
-    throttle.release("alice", IP)
+    throttle.release(reservation)
     assert ("alice", IP) not in throttle._by_client
     assert throttle._usernames_per_client == {}
 
@@ -215,18 +233,27 @@ def test_client_count_stays_exact_when_key_expires_during_acquire():
             max_failures_per_prefix=6,
             clock=clock,
         )
-        assert throttle.acquire("alice", IP) is None
-        throttle.failed("alice", IP)
+        throttle.failed(ok(throttle.acquire("alice", IP)))
         clock.now += 60.0 - offset * 0.1  # land the expiry inside acquire()
-        assert throttle.acquire("alice", IP) is None
+        assert allowed(throttle.acquire("alice", IP))
         keys = sum(1 for key in throttle._by_client._entries if key[1] == IP)
         assert throttle._usernames_per_client.get(IP, 0) == keys, offset
 
 
-def test_release_without_reservation_is_a_no_op():
+def test_release_of_unrecorded_reservation_is_a_no_op():
     throttle, _ = make()
-    throttle.release("alice", IP)
+    throttle.release(Reservation("alice", IP, 1000.0))
     assert len(throttle._by_client) == 0
+
+
+def test_disabled_throttle_returns_unrecorded_reservation():
+    throttle, _ = make(enabled=False)
+    reservation = ok(throttle.acquire("Alice", IP))
+    assert reservation == Reservation("alice", IP, None)
+    throttle.failed(reservation)
+    throttle.succeeded(reservation)
+    throttle.release(reservation)
+    assert len(throttle._by_username) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -237,17 +264,17 @@ def test_username_cap_blocks_ips_that_have_failed():
     throttle, _ = make(max_failures=3, per_username=4)
     fail(throttle, ip="10.0.0.1", times=2)
     fail(throttle, ip="10.0.0.2", times=2)
-    assert throttle.acquire("alice", "10.0.0.1") is not None
-    assert throttle.acquire("alice", "10.0.0.2") is not None
+    assert blocked(throttle.acquire("alice", "10.0.0.1"))
+    assert blocked(throttle.acquire("alice", "10.0.0.2"))
 
 
 def test_username_cap_never_blocks_a_clean_ip():
     throttle, _ = make(max_failures=3, per_username=4)
     for i in range(4):
         fail(throttle, ip=f"10.0.0.{i}")
-    assert throttle.acquire("alice", IP) is None
-    throttle.succeeded("alice", IP)
-    assert throttle.acquire("alice", IP) is None
+    reservation = ok(throttle.acquire("alice", IP))
+    throttle.succeeded(reservation)
+    assert allowed(throttle.acquire("alice", IP))
 
 
 def test_username_cap_gives_fresh_ip_a_single_guess():
@@ -255,16 +282,16 @@ def test_username_cap_gives_fresh_ip_a_single_guess():
     for i in range(4):
         fail(throttle, ip=f"10.0.0.{i}")
     fail(throttle, ip="10.0.1.1")
-    assert throttle.acquire("alice", "10.0.1.1") is not None
+    assert blocked(throttle.acquire("alice", "10.0.1.1"))
 
 
 def test_success_keeps_failures_from_other_ips_counted():
     throttle, _ = make(max_failures=3, per_username=4)
     for i in range(4):
         fail(throttle, ip=f"10.0.0.{i}")
-    assert throttle.acquire("alice", IP) is None
-    throttle.succeeded("alice", IP)
-    assert throttle.acquire("alice", "10.0.0.1") is not None
+    reservation = ok(throttle.acquire("alice", IP))
+    throttle.succeeded(reservation)
+    assert blocked(throttle.acquire("alice", "10.0.0.1"))
 
 
 def test_username_cap_retry_after_is_earliest_release():
@@ -295,8 +322,8 @@ def test_many_64s_in_one_48_are_capped():
     throttle, _ = make(max_failures=3, per_username=1000, per_prefix=6)
     for i in range(6):
         fail(throttle, ip=_slash64(i))
-    assert throttle.acquire("alice", _slash64(6)) is not None
-    assert throttle.acquire("alice", _slash64(500)) is not None
+    assert blocked(throttle.acquire("alice", _slash64(6)))
+    assert blocked(throttle.acquire("alice", _slash64(500)))
     assert len(throttle._by_client) == 6
 
 
@@ -308,15 +335,15 @@ def test_concurrent_burst_from_one_48_is_capped():
     """
     throttle, _ = make(max_failures=5, per_username=1000, per_prefix=15)
     results = [throttle.acquire("alice", _slash64(i)) for i in range(200)]
-    assert results[:15] == [None] * 15
-    assert all(r is not None for r in results[15:])
+    assert all(allowed(r) for r in results[:15])
+    assert all(blocked(r) for r in results[15:])
 
 
 def test_release_hands_back_48_reservation():
     throttle, _ = make(per_prefix=2)
     for i in range(5):
-        assert throttle.acquire("alice", _slash64(i)) is None
-        throttle.release("alice", _slash64(i))
+        reservation = ok(throttle.acquire("alice", _slash64(i)))
+        throttle.release(reservation)
     assert len(throttle._by_prefix) == 0
 
 
@@ -324,12 +351,56 @@ def test_success_withdraws_only_its_own_48_reservation():
     throttle, _ = make(per_prefix=3)
     fail(throttle, ip=_slash64(1))
     fail(throttle, ip=_slash64(2))
-    assert throttle.acquire("alice", _slash64(3)) is None
-    throttle.succeeded("alice", _slash64(3))
+    reservation = ok(throttle.acquire("alice", _slash64(3)))
+    throttle.succeeded(reservation)
     # The two real failures still count; one more fills the cap.
     assert len(throttle._by_prefix.recent(("alice", "2001:db8:aa::/48"))) == 2
     fail(throttle, ip=_slash64(4))
-    assert throttle.acquire("alice", _slash64(5)) is not None
+    assert blocked(throttle.acquire("alice", _slash64(5)))
+
+
+def test_repeated_successes_do_not_keep_old_48_failures_alive():
+    """
+    Regression: succeeded() withdrew the oldest /48 timestamp, so a user who
+    kept logging in successfully from the /48 kept an attacker's old
+    failures from ever expiring.
+    """
+    throttle, clock = make(max_failures=5, window=60.0, per_username=1000, per_prefix=3)
+    key = ("alice", "2001:db8:aa::/48")
+    fail(throttle, ip=_slash64(1))  # attacker, t=1000
+    fail(throttle, ip=_slash64(2))  # attacker, t=1000
+    for _ in range(40):  # the real user, every 25 s from their own /64
+        clock.now += 25
+        throttle.succeeded(ok(throttle.acquire("alice", _slash64(9))))
+    assert throttle._by_prefix.recent(key) is None
+    # So one typo by the real user does not lock the whole /48.
+    fail(throttle, ip=_slash64(9))
+    assert allowed(throttle.acquire("alice", _slash64(7)))
+
+
+def test_success_withdraws_its_own_48_timestamp_exactly():
+    throttle, clock = make(max_failures=5, window=60.0, per_username=1000, per_prefix=6)
+    key = ("alice", "2001:db8:aa::/48")
+    fail(throttle, ip=_slash64(1))  # t=1000
+    clock.now += 10
+    reservation = ok(throttle.acquire("alice", _slash64(2)))  # t=1010
+    clock.now += 10
+    fail(throttle, ip=_slash64(3))  # t=1020
+    throttle.succeeded(reservation)
+    assert throttle._by_prefix.recent(key) == [1000.0, 1020.0]
+    clock.now = 1061  # the t=1000 failure expires on time
+    assert throttle._by_prefix.recent(key) == [1020.0]
+
+
+def test_release_withdraws_its_own_client_timestamp_exactly():
+    throttle, clock = make(max_failures=5, window=60.0)
+    fail(throttle)  # t=1000
+    clock.now += 10
+    reservation = ok(throttle.acquire("alice", IP))  # t=1010
+    clock.now += 10
+    fail(throttle)  # t=1020
+    throttle.release(reservation)
+    assert throttle._by_client.recent(("alice", IP)) == [1000.0, 1020.0]
 
 
 def test_48_cap_blocks_correct_password_too_and_reports_expiry():
@@ -345,37 +416,37 @@ def test_48_cap_is_per_username_and_per_48():
     throttle, _ = make(per_prefix=2)
     fail(throttle, ip=_slash64(1))
     fail(throttle, ip=_slash64(2))
-    assert throttle.acquire("bob", _slash64(3)) is None
-    assert throttle.acquire("alice", _slash64(3, site="2001:db8:bb")) is None
-    assert throttle.acquire("alice", IP) is None
+    assert allowed(throttle.acquire("bob", _slash64(3)))
+    assert allowed(throttle.acquire("alice", _slash64(3, site="2001:db8:bb")))
+    assert allowed(throttle.acquire("alice", IP))
 
 
 def test_48_counter_ignores_ipv4_clients():
     throttle, _ = make(max_failures=100, per_username=1000, per_prefix=2)
     fail(throttle, times=10)
     assert len(throttle._by_prefix) == 0
-    assert throttle.acquire("alice", IP) is None
+    assert allowed(throttle.acquire("alice", IP))
 
 
 def test_48_counter_counts_failures_only():
     throttle, _ = make(per_prefix=2)
     for i in range(5):
-        assert throttle.acquire("alice", _slash64(i)) is None
-        throttle.succeeded("alice", _slash64(i))
-    assert throttle.acquire("alice", _slash64(9)) is None
-    throttle.succeeded("alice", _slash64(9))
-    assert throttle.acquire("bob", _slash64(1)) is None
-    throttle.release("bob", _slash64(1))
+        reservation = ok(throttle.acquire("alice", _slash64(i)))
+        throttle.succeeded(reservation)
+    reservation = ok(throttle.acquire("alice", _slash64(9)))
+    throttle.succeeded(reservation)
+    reservation = ok(throttle.acquire("bob", _slash64(1)))
+    throttle.release(reservation)
     assert len(throttle._by_prefix) == 0
 
 
 def test_success_does_not_clear_48_counter():
     throttle, _ = make(per_prefix=2)
     fail(throttle, ip=_slash64(1))
-    assert throttle.acquire("alice", _slash64(2)) is None
-    throttle.succeeded("alice", _slash64(2))
+    reservation = ok(throttle.acquire("alice", _slash64(2)))
+    throttle.succeeded(reservation)
     fail(throttle, ip=_slash64(3))
-    assert throttle.acquire("alice", _slash64(4)) is not None
+    assert blocked(throttle.acquire("alice", _slash64(4)))
 
 
 def test_48_counter_expires_with_window():
@@ -383,7 +454,7 @@ def test_48_counter_expires_with_window():
     fail(throttle, ip=_slash64(1))
     fail(throttle, ip=_slash64(2))
     clock.now += 61
-    assert throttle.acquire("alice", _slash64(3)) is None
+    assert allowed(throttle.acquire("alice", _slash64(3)))
 
 
 def test_48_counter_respects_max_tracked():
@@ -391,7 +462,7 @@ def test_48_counter_respects_max_tracked():
     fail(throttle, username="a", ip=_slash64(1, site="2001:db8:1"))
     fail(throttle, username="a", ip=_slash64(1, site="2001:db8:2"))
     # The /48 log is full of active keys, so a new (username, /48) is refused.
-    assert throttle.acquire("a", _slash64(1, site="2001:db8:3")) is not None
+    assert blocked(throttle.acquire("a", _slash64(1, site="2001:db8:3")))
     assert len(throttle._by_prefix) == 2
 
 
@@ -428,9 +499,9 @@ def test_retry_after_covers_own_limit_and_username_cap():
     wait = throttle.acquire("alice", "10.0.0.1")
     assert wait == 70
     clock.now = 1050 + wait - 1
-    assert throttle.acquire("alice", "10.0.0.1") is not None
+    assert blocked(throttle.acquire("alice", "10.0.0.1"))
     clock.now = 1050 + wait
-    assert throttle.acquire("alice", "10.0.0.1") is None
+    assert allowed(throttle.acquire("alice", "10.0.0.1"))
 
 
 def test_retry_after_covers_full_table_and_48_cap():
@@ -452,9 +523,9 @@ def test_retry_after_covers_full_table_and_48_cap():
     wait = throttle.acquire("bob", fresh)
     assert wait == 80
     clock.now = 1060 + wait - 1
-    assert throttle.acquire("bob", fresh) is not None
+    assert blocked(throttle.acquire("bob", fresh))
     clock.now = 1060 + wait
-    assert throttle.acquire("bob", fresh) is None
+    assert allowed(throttle.acquire("bob", fresh))
 
 
 # ---------------------------------------------------------------------------
@@ -475,12 +546,12 @@ def test_full_table_never_evicts_active_counter():
     """Regression: flooding new usernames must not reset an active counter."""
     throttle, _ = make(max_tracked=2)
     fail(throttle, username="victim", times=3)
-    assert throttle.acquire("victim", IP) is not None
+    assert blocked(throttle.acquire("victim", IP))
 
     for i in range(100):
         throttle.acquire(f"flood{i}", IP)
 
-    assert throttle.acquire("victim", IP) is not None
+    assert blocked(throttle.acquire("victim", IP))
     assert len(throttle._by_client) == 2
 
 
@@ -492,9 +563,9 @@ def test_full_table_fails_closed_for_new_keys():
     # "a" is the oldest active key and expires 50 s from now.
     assert throttle.acquire("new", IP) == 50
     # Known keys below the limit are still allowed.
-    assert throttle.acquire("a", IP) is None
+    assert allowed(throttle.acquire("a", IP))
     clock.now += 60
-    assert throttle.acquire("new", IP) is None
+    assert allowed(throttle.acquire("new", IP))
 
 
 def test_refreshed_key_moves_behind_older_keys():
@@ -545,14 +616,14 @@ def test_client_is_refused_new_usernames_past_its_cap():
         fail(throttle, username=name)
     assert throttle.acquire("d", IP) == 60
     # Usernames it already has failures on are not affected by this cap.
-    assert throttle.acquire("a", IP) is None
+    assert allowed(throttle.acquire("a", IP))
 
 
 def test_client_cap_is_per_client():
     throttle, _ = make(per_client=3, pressure_ratio=0)
     for name in ("a", "b", "c"):
         fail(throttle, username=name)
-    assert throttle.acquire("d", OTHER_IP) is None
+    assert allowed(throttle.acquire("d", OTHER_IP))
 
 
 def test_client_cap_frees_up_when_failures_expire():
@@ -560,37 +631,38 @@ def test_client_cap_frees_up_when_failures_expire():
     for name in ("a", "b", "c"):
         fail(throttle, username=name)
     clock.now += 61
-    assert throttle.acquire("d", IP) is None
+    assert allowed(throttle.acquire("d", IP))
     assert throttle._usernames_per_client == {IP: 1}
 
 
 def test_success_and_release_free_client_slots():
     throttle, _ = make(per_client=2, pressure_ratio=0)
     fail(throttle, username="a")
-    assert throttle.acquire("b", IP) is None
-    throttle.release("b", IP)
-    assert throttle.acquire("c", IP) is None
-    throttle.succeeded("c", IP)
+    reservation = ok(throttle.acquire("b", IP))
+    throttle.release(reservation)
+    reservation = ok(throttle.acquire("c", IP))
+    throttle.succeeded(reservation)
     assert throttle._usernames_per_client == {IP: 1}
-    assert throttle.acquire("d", IP) is None
+    assert allowed(throttle.acquire("d", IP))
 
 
 def test_successful_logins_do_not_use_client_cap():
     """Many users behind one NAT can log in; only failures use the cap."""
     throttle, _ = make(per_client=3, pressure_ratio=0)
     for i in range(50):
-        assert throttle.acquire(f"member{i}", IP) is None
-        throttle.succeeded(f"member{i}", IP)
+        reservation = ok(throttle.acquire(f"member{i}", IP))
+        throttle.succeeded(reservation)
 
 
 def test_junk_usernames_from_one_client_cannot_block_user_on_clean_ip():
     """Regression: one client could fill the table and lock everyone out."""
     throttle, _ = make(per_client=20, max_tracked=100)
     for i in range(1000):
-        if throttle.acquire(f"junk{i}", "203.0.113.66") is None:
-            throttle.failed(f"junk{i}", "203.0.113.66")
+        result = throttle.acquire(f"junk{i}", "203.0.113.66")
+        if allowed(result):
+            throttle.failed(result)
     assert len(throttle._by_client) == 20
-    assert throttle.acquire("alice", IP) is None
+    assert allowed(throttle.acquire("alice", IP))
 
 
 def test_client_cap_not_enforced_below_pressure():
@@ -602,7 +674,7 @@ def test_client_cap_not_enforced_below_pressure():
     for i in range(25):
         fail(throttle, username=f"typo{i}")
     assert len(throttle._by_client) == 25 < throttle.pressure_threshold
-    assert throttle.acquire("alice", IP) is None
+    assert allowed(throttle.acquire("alice", IP))
 
 
 def test_client_cap_enforced_once_under_pressure():
@@ -614,7 +686,7 @@ def test_client_cap_enforced_once_under_pressure():
         fail(throttle, username=f"junk{i}")
     assert throttle.acquire("alice", IP) == 60
     # A different client is not affected by this client's cap.
-    assert throttle.acquire("alice", OTHER_IP) is None
+    assert allowed(throttle.acquire("alice", OTHER_IP))
 
 
 def test_pressure_counts_only_active_keys():
@@ -624,14 +696,14 @@ def test_pressure_counts_only_active_keys():
     clock.now += 61  # all of those have expired
     for i in range(20):
         fail(throttle, username=f"junk{i}")
-    assert throttle.acquire("alice", IP) is None
+    assert allowed(throttle.acquire("alice", IP))
 
 
 def test_pressure_ratio_one_enforces_cap_only_when_full():
     throttle, _ = make(per_client=2, max_tracked=4, pressure_ratio=1.0)
     fail(throttle, username="a")
     fail(throttle, username="b")
-    assert throttle.acquire("c", IP) is None
+    assert allowed(throttle.acquire("c", IP))
 
 
 # ---------------------------------------------------------------------------

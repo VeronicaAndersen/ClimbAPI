@@ -30,11 +30,12 @@ fresh client once the username cap is hit, and at most
 
 An attempt is reserved as a failure in the (username, client) and, for IPv6,
 the (username, /48) counters *before* the password check, so a burst of
-concurrent requests cannot slip past those limits while the hashes run. A
-successful login clears the (username, client) counter and withdraws its /48
-reservation (the oldest /48 timestamp is dropped, so earlier failures are not
-cleared and the /48 count can only expire later than exact, never earlier). A
-server error hands both reservations back (``release``), so only real
+concurrent requests cannot slip past those limits while the hashes run.
+``acquire`` returns a ``Reservation`` holding the exact timestamp it recorded.
+A successful login clears the (username, client) counter and withdraws exactly
+its own /48 timestamp, so earlier failures keep their own expiry: they are not
+cleared, and repeated successes do not keep them alive either. A server error
+hands both reservations back the same way (``release``), so only real
 failures count. The per-username counter is still only updated once a check
 has failed, so a concurrent burst may overshoot it; that is harmless because
 it never blocks a client on its own, but it means that cap is approximate.
@@ -74,6 +75,7 @@ import logging
 import math
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from schema.climber import normalize_username
 from security.client_address import ipv6_site_key
@@ -82,6 +84,22 @@ from security.rate_limited_warning import RateLimitedWarning
 from security.sliding_window import SlidingWindowLog
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class Reservation:
+    """
+    A reserved login attempt, handed to ``failed``, ``succeeded`` or
+    ``release`` once the password check has finished.
+
+    ``at`` is the timestamp recorded for it, so exactly this attempt can be
+    withdrawn later; None when the throttle is disabled and nothing was
+    recorded.
+    """
+
+    username: str
+    client_ip: str
+    at: float | None
 
 
 class LoginThrottle:
@@ -105,6 +123,7 @@ class LoginThrottle:
         self.max_failures_per_prefix = max_failures_per_prefix
         self.window_seconds = window_seconds
         self.enabled = enabled
+        self._clock = clock
         # Key count from which the per-client username cap applies.
         self.pressure_threshold = math.ceil(pressure_ratio * max_tracked)
         # Active (username, client) keys per client. Kept in step with
@@ -146,75 +165,82 @@ class LoginThrottle:
             clock=clock,
         )
 
-    def acquire(self, username: str, client_ip: str) -> int | None:
+    def acquire(self, username: str, client_ip: str) -> Reservation | int:
         """
-        Reserve a login attempt, counted as a failure unless ``succeeded``.
+        Reserve a login attempt, counted as a failure unless it succeeds.
 
-        Returns None when the attempt may go ahead, or the seconds to wait
-        when it is blocked (nothing is recorded then). Call ``failed``,
-        ``succeeded`` or ``release`` once the password check has finished.
+        Returns a ``Reservation`` when the attempt may go ahead, or the
+        seconds to wait when it is blocked (nothing is recorded then). Pass
+        the reservation to ``failed``, ``succeeded`` or ``release`` once the
+        password check has finished.
         """
-        if not self.enabled:
-            return None
         username = normalize_username(username)
+        if not self.enabled:
+            return Reservation(username, client_ip, None)
         client_key = (username, client_ip)
         retry_after = self._retry_after(username, client_ip, client_key)
         if retry_after is not None:
             return retry_after
+        # One clock read for both counters, kept in the reservation so exactly
+        # this attempt can be withdrawn later.
+        now = self._clock()
         # Cannot fail: _retry_after checked capacity and nothing awaited since.
-        self._by_client.add(client_key)
+        self._by_client.add(client_key, at=now)
         site = ipv6_site_key(client_ip)
         if site is not None:
             # Reserved now, not in failed(): otherwise a burst from many /64s
             # would all pass the /48 check while their hashes run.
-            self._by_prefix.add((username, site))
-        return None
+            self._by_prefix.add((username, site), at=now)
+        return Reservation(username, client_ip, now)
 
-    def failed(self, username: str, client_ip: str) -> None:
+    def failed(self, reservation: Reservation) -> None:
         """The reserved attempt had wrong credentials."""
-        if not self.enabled:
+        if not self.enabled or reservation.at is None:
             return
         # Refused only when the log is full of active usernames; acquire()
         # then blocks new usernames until a slot frees up. The (username,
         # client) and /48 failures were already reserved in acquire().
-        self._by_username.add(normalize_username(username))
+        self._by_username.add(reservation.username)
 
-    def succeeded(self, username: str, client_ip: str) -> None:
+    def succeeded(self, reservation: Reservation) -> None:
         """
         The reserved attempt was a correct login: forget this IP's failures.
 
         Failures from other IPs stay counted against the username, and the
         /48 counter is not cleared either: one success inside a /48 must not
-        reset the budget of every other /64 in it. Only this attempt's /48
-        reservation is withdrawn.
+        reset the budget of every other /64 in it. Only this attempt's own
+        /48 timestamp is withdrawn.
         """
-        if not self.enabled:
+        if not self.enabled or reservation.at is None:
             return
-        username = normalize_username(username)
         # Intended: drop the whole (username, client) key, not just this
         # reservation. Proving the password resets that client's failure count
         # for the username, as a lockout counter normally does.
-        self._by_client.discard((username, client_ip))
-        self._withdraw_prefix_reservation(username, client_ip)
+        self._by_client.discard((reservation.username, reservation.client_ip))
+        self._withdraw_prefix_reservation(
+            reservation.username, reservation.client_ip, reservation.at
+        )
 
-    def release(self, username: str, client_ip: str) -> None:
+    def release(self, reservation: Reservation) -> None:
         """
         Hand back a reservation whose password check never completed.
 
         For server-side errors (database, hashing): they say nothing about the
-        credentials, so they must not count as a failure. The count drops by
-        one; earlier failures stay (see ``SlidingWindowLog.withdraw_one``).
+        credentials, so they must not count as a failure. Exactly this
+        attempt's timestamps are withdrawn; earlier failures stay.
         """
-        if not self.enabled:
+        if not self.enabled or reservation.at is None:
             return
-        username = normalize_username(username)
-        self._by_client.withdraw_one((username, client_ip))
-        self._withdraw_prefix_reservation(username, client_ip)
+        client_key = (reservation.username, reservation.client_ip)
+        self._by_client.withdraw_at(client_key, reservation.at)
+        self._withdraw_prefix_reservation(
+            reservation.username, reservation.client_ip, reservation.at
+        )
 
-    def _withdraw_prefix_reservation(self, username: str, client_ip: str) -> None:
+    def _withdraw_prefix_reservation(self, username: str, client_ip: str, at: float) -> None:
         site = ipv6_site_key(client_ip)
         if site is not None:
-            self._by_prefix.withdraw_one((username, site))
+            self._by_prefix.withdraw_at((username, site), at)
 
     def clear(self) -> None:
         self._by_client.clear()

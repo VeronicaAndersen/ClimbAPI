@@ -35,7 +35,7 @@ async def test_server_error_does_not_count_as_failed_login():
             await authenticate_user(
                 FailingSession(RuntimeError("db down")), "alice", "pw", IP
             )
-    assert login_throttle.acquire("alice", IP) is None
+    assert not isinstance(login_throttle.acquire("alice", IP), int)
     assert len(login_throttle._by_username) == 0
 
 
