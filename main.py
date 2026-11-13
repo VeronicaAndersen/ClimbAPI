@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import DBAPIError
@@ -41,6 +42,34 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+
+
+def _printable(value: object) -> object:
+    """Strings made safe to encode as UTF-8 (lone surrogates become "?")."""
+    if isinstance(value, str):
+        return value.encode("utf-8", "replace").decode("utf-8")
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(_request: Request, exc: RequestValidationError):
+    """
+    422 with each error's loc, msg and type only.
+
+    FastAPI's default also returns "input" (and "ctx"), which echoes request
+    data such as a password back in the response. With a lone surrogate in
+    the input (JSON "\\ud800") the default response could not even be encoded,
+    giving a 500 and a traceback holding the request data.
+    """
+    detail = [
+        {
+            "loc": [_printable(part) for part in error.get("loc", ())],
+            "msg": _printable(str(error.get("msg", ""))),
+            "type": error.get("type"),
+        }
+        for error in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 @app.exception_handler(DBAPIError)
