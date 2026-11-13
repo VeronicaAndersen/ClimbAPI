@@ -96,4 +96,6 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8080 --proxy-headers --forwarde
 
 Without this, every request appears to come from the proxy and all clients share one budget. If the app sees a missing or non-IP client address, it uses one shared `unknown` key for all such clients and logs a warning (at most once a minute, without the address).
 
+Each request's database session is rolled back (after an error) and closed even if the request is cancelled. `DB_CLEANUP_TIMEOUT_SECONDS` (default `10`) bounds each of those steps; if one times out, the session's connections are invalidated instead of being returned to the pool, and only the error type is logged.
+
 Password hashing (Argon2) runs on a small dedicated thread pool so it does not block the event loop. `ARGON2_MAX_CONCURRENCY` (default `4`) caps parallel hashes, and with it peak memory (each hash uses `ARGON2_MEMORY_KIB`, default 64 MiB).

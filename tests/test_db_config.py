@@ -5,6 +5,7 @@ import logging
 import traceback
 from contextlib import asynccontextmanager
 
+import anyio
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -261,9 +262,9 @@ async def test_cancel_in_same_turn_as_step_finishes_is_not_lost():
         await gate
 
     async def caller():
-        _error, cancelled = await config._run_to_completion(step())
-        if cancelled is not None:
-            raise cancelled
+        outcome = await config._run_to_completion(step())
+        if outcome.cancelled is not None:
+            raise outcome.cancelled
         return "carried on"
 
     task = asyncio.create_task(caller())
@@ -302,3 +303,121 @@ async def test_cancel_wins_over_close_error_on_success_path(monkeypatch, caplog)
     assert session.closed
     assert "Close failed during cancellation (OSError)" in caplog.text
     assert SECRET not in caplog.text
+
+
+
+# ---------------------------------------------------------------------------
+# Cleanup is bounded: no busy loop, and a deadline per step
+# ---------------------------------------------------------------------------
+
+
+async def test_cleanup_wait_does_not_spin_under_anyio_cancel_scope(monkeypatch):
+    """
+    Regression: anyio re-delivers a scope cancellation every loop turn, and
+    the wait loop re-entered once per delivery (~30k turns in 0.45 s).
+    """
+    waits = 0
+    real_wait = asyncio.wait
+
+    async def counting_wait(*args, **kwargs):
+        nonlocal waits
+        waits += 1
+        return await real_wait(*args, **kwargs)
+
+    monkeypatch.setattr(config.asyncio, "wait", counting_wait)
+
+    async def step():
+        await asyncio.sleep(0.1)
+
+    with anyio.CancelScope() as scope:
+        scope.cancel()
+        outcome = await config._run_to_completion(step(), timeout=5)
+    assert outcome.error is None and not outcome.timed_out
+    assert waits <= 3
+
+
+async def test_step_that_hangs_times_out_and_stays_referenced():
+    release = asyncio.Event()
+
+    async def hung():
+        await release.wait()
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    outcome = await config._run_to_completion(hung(), timeout=0.05)
+    assert outcome.timed_out
+    assert loop.time() - started < 1
+    # The abandoned task is kept alive (not garbage collected mid-flight)...
+    assert any(not t.done() for t in config._RUNNING_CLEANUP)
+    release.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    # ...and forgotten once it finishes.
+    assert all(t.done() for t in config._RUNNING_CLEANUP)
+
+
+class _HungCloseSession(_SlowSession):
+    def __init__(self):
+        super().__init__()
+        self.release = asyncio.Event()
+        self.invalidated = False
+
+    async def close(self):
+        await self.release.wait()
+        self.closed = True
+
+    async def invalidate(self):
+        self.invalidated = True
+
+
+async def test_hung_close_after_success_times_out_and_invalidates(monkeypatch, caplog):
+    session = _HungCloseSession()
+    monkeypatch.setattr(config, "AsyncSessionLocal", lambda: session)
+    monkeypatch.setattr(config, "CLEANUP_TIMEOUT_SECONDS", 0.05)
+
+    async def request():
+        async with asynccontextmanager(config.get_session)():
+            pass
+
+    with caplog.at_level(logging.DEBUG):
+        await asyncio.wait_for(request(), timeout=2)
+    assert session.invalidated
+    assert "Close timed out after a successful request" in caplog.text
+    session.release.set()
+
+
+async def test_hung_rollback_after_error_times_out_invalidates_and_reraises(
+    monkeypatch, caplog
+):
+    class HungRollback(_HungCloseSession):
+        async def rollback(self):
+            await self.release.wait()
+
+    session = HungRollback()
+    monkeypatch.setattr(config, "AsyncSessionLocal", lambda: session)
+    monkeypatch.setattr(config, "CLEANUP_TIMEOUT_SECONDS", 0.05)
+    error = _integrity_error()
+
+    async def request():
+        async with asynccontextmanager(config.get_session)():
+            raise error
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(type(error)) as raised:
+        await asyncio.wait_for(request(), timeout=2)
+    assert raised.value is error
+    assert session.invalidated
+    assert "Rollback timed out after IntegrityError" in caplog.text
+    assert SECRET not in caplog.text
+    session.release.set()
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "soon"])
+def test_cleanup_timeout_setting_must_be_positive(monkeypatch, value):
+    monkeypatch.setenv("DB_CLEANUP_TIMEOUT_SECONDS", value)
+    with pytest.raises(RuntimeError, match="DB_CLEANUP_TIMEOUT_SECONDS"):
+        config._cleanup_timeout_from_env()
+
+
+def test_cleanup_timeout_setting_default(monkeypatch):
+    monkeypatch.delenv("DB_CLEANUP_TIMEOUT_SECONDS", raising=False)
+    assert config._cleanup_timeout_from_env() == 10.0
