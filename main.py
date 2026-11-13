@@ -9,6 +9,7 @@ from sqlalchemy.exc import DBAPIError
 
 from api.router import api_router
 from security.hashing import prepare_dummy_hash
+from services.email import warn_if_mail_not_configured
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ _MAX_LOGGED_STATEMENT = 1000
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    warn_if_mail_not_configured()
     await prepare_dummy_hash()
     yield
 

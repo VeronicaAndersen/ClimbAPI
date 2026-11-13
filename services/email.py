@@ -51,6 +51,23 @@ def get_mail_config() -> Optional[ConnectionConfig]:
     )
 
 
+def warn_if_mail_not_configured() -> bool:
+    """
+    Log one clear warning at startup when mail is not configured.
+
+    The send-time warning is rate-limited and only appears once someone asks
+    for a reset; this makes the misconfiguration visible at deploy time.
+    Returns whether mail is configured.
+    """
+    if get_mail_config() is not None:
+        return True
+    logger.warning(
+        "Mail is not configured (MAIL_USERNAME/MAIL_PASSWORD are empty): "
+        "password reset emails will not be sent"
+    )
+    return False
+
+
 async def send_password_reset_email(email: str, token: str, firstname: Optional[str] = None) -> bool:
     config = get_mail_config()
     if not config:

@@ -138,3 +138,25 @@ async def test_reset_url_is_escaped_in_html(monkeypatch):
     (message,) = _CapturingMail.sent
     assert 'href="https://a.example/"x' not in message.body
     assert "https://a.example/&quot;x/reset-password?token=" in message.body
+
+
+async def test_startup_warns_once_when_mail_is_not_configured(monkeypatch, caplog):
+    from main import app
+
+    monkeypatch.setattr(email_service, "get_mail_config", lambda: None)
+    with caplog.at_level(logging.WARNING, logger="services.email"):
+        async with app.router.lifespan_context(app):
+            pass
+    messages = [r.getMessage() for r in caplog.records if r.name == "services.email"]
+    assert len(messages) == 1
+    assert "password reset emails will not be sent" in messages[0]
+
+
+async def test_startup_is_quiet_when_mail_is_configured(monkeypatch, caplog):
+    from main import app
+
+    monkeypatch.setattr(email_service, "get_mail_config", lambda: object())
+    with caplog.at_level(logging.WARNING, logger="services.email"):
+        async with app.router.lifespan_context(app):
+            pass
+    assert not [r for r in caplog.records if r.name == "services.email"]
