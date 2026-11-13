@@ -17,6 +17,20 @@ def contains_control_characters(value: str) -> bool:
     return any(unicodedata.category(char) == "Cc" for char in value)
 
 
+# Control (Cc), format (Cf: zero-width characters, bidi overrides such as
+# U+202E) and surrogate (Cs: lone surrogates, not storable as UTF-8)
+# characters. Format characters let two usernames look identical or make one
+# display as something else.
+_FORBIDDEN_USERNAME_CATEGORIES = frozenset({"Cc", "Cf", "Cs"})
+
+
+def contains_forbidden_username_characters(value: str) -> bool:
+    """True if ``value`` has a control, invisible format or surrogate character."""
+    return any(
+        unicodedata.category(char) in _FORBIDDEN_USERNAME_CATEGORIES for char in value
+    )
+
+
 def is_valid_normalized_username(username: str) -> bool:
     """
     Whether a normalized username could belong to an account: signup rejects
@@ -25,7 +39,7 @@ def is_valid_normalized_username(username: str) -> bool:
     return (
         bool(username)
         and len(username) <= USERNAME_MAX_LENGTH
-        and not contains_control_characters(username)
+        and not contains_forbidden_username_characters(username)
     )
 
 
@@ -33,16 +47,19 @@ def _normalized_username_within_limit(username: str) -> str:
     """
     Normalize and re-check. The raw-length checks are not enough: trimming
     can empty a string ("   "), and lowercasing can lengthen one ("İ" becomes
-    two characters). Control characters such as NUL are refused too; the
-    database rejects NUL in text, which used to surface as a 500.
+    two characters). Control characters such as NUL are refused too (the
+    database rejects NUL in text, which used to surface as a 500), as are
+    invisible format characters and lone surrogates.
     """
     normalized = normalize_username(username)
     if not normalized:
         raise ValueError("username must not be empty or only whitespace")
     if len(normalized) > USERNAME_MAX_LENGTH:
         raise ValueError(f"username must be at most {USERNAME_MAX_LENGTH} characters")
-    if contains_control_characters(normalized):
-        raise ValueError("username must not contain control characters")
+    if contains_forbidden_username_characters(normalized):
+        raise ValueError(
+            "username must not contain control or invisible formatting characters"
+        )
     return normalized
 
 

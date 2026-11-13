@@ -287,7 +287,7 @@ class TestGetAllClimbers:
 # ---------------------------------------------------------------------------
 
 class TestPasswordResetRequest:
-    @pytest.mark.parametrize("username", ["ali\x00ce", "   ", "a\x07b"])
+    @pytest.mark.parametrize("username", ["ali\x00ce", "   ", "a\x07b", "ad\u200bmin"])
     async def test_unusable_username_gets_generic_answer_without_database(
         self, client, username
     ):
@@ -397,7 +397,7 @@ class TestCredentialLengthLimits:
         assert resp.status_code == 422
 
     @pytest.mark.parametrize("path", ["/auth/login", "/auth/token"])
-    @pytest.mark.parametrize("username", ["ali\x00ce", "a\x1bb"])
+    @pytest.mark.parametrize("username", ["ali\x00ce", "a\x1bb", "ad\u200bmin", "\u202eadmin"])
     async def test_control_characters_rejected_before_database_and_throttle(
         self, client, path, username
     ):

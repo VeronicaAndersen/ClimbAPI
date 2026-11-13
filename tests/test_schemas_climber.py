@@ -130,3 +130,14 @@ def test_username_with_control_characters_is_rejected(model, username):
 def test_username_with_ordinary_unicode_is_accepted():
     c = ClimberCreate(username="Åsa-Öberg_ü", password="secret123", firstname="A", lastname="B")
     assert c.username == "åsa-öberg_ü"
+
+
+@pytest.mark.parametrize("model", [ClimberCreate, ClimberUpdate])
+@pytest.mark.parametrize(
+    "username",
+    ["ad\u200bmin", "\u202eadmin", "ad\u200dmin", "\ufeffadmin", "ad\u2066min", "a\ud800b"],
+)
+def test_username_with_format_or_surrogate_characters_is_rejected(model, username):
+    """Regression: zero-width and bidi characters allowed look-alike usernames."""
+    with pytest.raises(ValidationError):
+        model(username=username, password="secret123", firstname="A", lastname="B")
