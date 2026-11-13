@@ -1,6 +1,9 @@
 """Unit tests for db/config.py"""
 
+import asyncio
 import logging
+import traceback
+from contextlib import asynccontextmanager
 
 import pytest
 from sqlalchemy import text
@@ -117,4 +120,130 @@ async def test_session_is_closed_after_success(monkeypatch):
         await gen.__anext__()
     except StopAsyncIteration:
         pass
+    assert session.closed
+
+
+# ---------------------------------------------------------------------------
+# Cancellation: the session is still closed, and nothing chains the DB error
+# ---------------------------------------------------------------------------
+
+
+class _SlowSession:
+    """Rollback and close take a moment, like real I/O, and can be observed."""
+
+    def __init__(self):
+        self.rollback_started = asyncio.Event()
+        self.rolled_back = False
+        self.closed = False
+
+    async def rollback(self):
+        self.rollback_started.set()
+        await asyncio.sleep(0.02)
+        self.rolled_back = True
+
+    async def close(self):
+        await asyncio.sleep(0.02)
+        self.closed = True
+
+
+def _text_of(exc: BaseException) -> str:
+    """The traceback a logger would print for ``exc``, chains included."""
+    return "".join(traceback.format_exception(exc))
+
+
+async def _cancelled_result(task: asyncio.Task) -> asyncio.CancelledError:
+    with pytest.raises(asyncio.CancelledError) as raised:
+        await task
+    return raised.value
+
+
+async def test_cancel_during_endpoint_still_closes_session(monkeypatch, caplog):
+    """Regression: a cancelled request abandoned close() and leaked its connection."""
+    session = _SlowSession()
+    monkeypatch.setattr(config, "AsyncSessionLocal", lambda: session)
+    in_endpoint = asyncio.Event()
+
+    async def request():
+        async with asynccontextmanager(config.get_session)():
+            in_endpoint.set()
+            await asyncio.sleep(10)
+
+    task = asyncio.create_task(request())
+    await in_endpoint.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()  # a second cancel arrives during close()
+    error = await _cancelled_result(task)
+
+    assert session.closed
+    assert SECRET not in _text_of(error)
+    assert SECRET not in caplog.text
+
+
+async def test_cancel_during_rollback_still_closes_and_hides_db_error(monkeypatch, caplog):
+    """
+    Regression: a cancel during rollback abandoned close(), and the
+    CancelledError chained the original DBAPIError, printing its DETAIL.
+    """
+    session = _SlowSession()
+    monkeypatch.setattr(config, "AsyncSessionLocal", lambda: session)
+
+    async def request():
+        async with asynccontextmanager(config.get_session)():
+            raise _integrity_error()
+
+    task = asyncio.create_task(request())
+    await session.rollback_started.wait()
+    task.cancel()
+    with caplog.at_level(logging.DEBUG):
+        error = await _cancelled_result(task)
+
+    assert session.rolled_back
+    assert session.closed
+    assert error.__suppress_context__
+    assert SECRET not in _text_of(error)
+    assert "DETAIL" not in _text_of(error)
+    assert SECRET not in caplog.text
+
+
+async def test_aclose_closes_session(monkeypatch):
+    session = _SlowSession()
+    monkeypatch.setattr(config, "AsyncSessionLocal", lambda: session)
+    gen = config.get_session()
+    assert await gen.__anext__() is session
+    await gen.aclose()  # GeneratorExit inside the generator
+    assert session.closed
+    assert not session.rolled_back
+
+
+async def test_cancel_during_normal_close_finishes_close(monkeypatch):
+    session = _SlowSession()
+    monkeypatch.setattr(config, "AsyncSessionLocal", lambda: session)
+    body_done = asyncio.Event()
+
+    async def request():
+        async with asynccontextmanager(config.get_session)():
+            body_done.set()
+
+    task = asyncio.create_task(request())
+    await body_done.wait()
+    await asyncio.sleep(0)  # now inside close()
+    task.cancel()
+    await _cancelled_result(task)
+    assert session.closed
+
+
+async def test_failed_commit_is_reraised_unchanged(monkeypatch):
+    session = _SlowSession()
+    monkeypatch.setattr(config, "AsyncSessionLocal", lambda: session)
+    error = _integrity_error()
+
+    async def request():
+        async with asynccontextmanager(config.get_session)():
+            raise error
+
+    with pytest.raises(type(error)) as raised:
+        await request()
+    assert raised.value is error
+    assert session.rolled_back
     assert session.closed
