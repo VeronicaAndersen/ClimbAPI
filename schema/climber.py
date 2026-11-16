@@ -52,6 +52,10 @@ _NEW_USERNAME_PUNCTUATION = frozenset("._-@")
 # composes most of them into one character); more is only good for
 # "zalgo" names that render as a tall smear over neighbouring text.
 _MAX_MARKS_PER_LETTER = 3
+# Modifier letters (Lm) that only stretch the line between letters and are
+# nearly invisible: ARABIC TATWEEL and NKO LAJANYALAN. They would let two
+# usernames look the same. Other Lm characters are left alone.
+_STRETCHING_LETTERS = frozenset({chr(0x0640), chr(0x07FA)})
 NEW_USERNAME_RULE = (
     "username may only contain letters (with accents), digits, single spaces "
     "between words, and . _ - @"
@@ -71,7 +75,8 @@ def validate_new_username(username: str) -> str:
     client. Allowed after normalizing: letters (L*), up to three combining
     marks (M*) in a row directly after a letter, decimal digits (Nd), the
     characters . _ - @, and single ASCII spaces between other characters.
-    Everything else is refused, as are Default_Ignorable code points.
+    Everything else is refused, as are Default_Ignorable code points and
+    the nearly invisible stretching letters U+0640 and U+07FA.
     """
     normalized = normalize_new_username(username)
     if not normalized:
@@ -84,7 +89,7 @@ def validate_new_username(username: str) -> str:
     marks_in_row = 0
     for char in normalized:
         category = unicodedata.category(char)
-        if _is_default_ignorable(char):
+        if _is_default_ignorable(char) or char in _STRETCHING_LETTERS:
             raise ValueError(NEW_USERNAME_RULE)
         if category.startswith("L"):
             after_letter = True

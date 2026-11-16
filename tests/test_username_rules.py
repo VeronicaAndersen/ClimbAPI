@@ -191,3 +191,36 @@ def test_more_than_three_marks_per_letter_rejected(raw):
 
 def test_mark_count_restarts_at_each_letter():
     assert validate_new_username("x\u0301\u0302\u0303y\u0301\u0302\u0303")
+
+
+
+# ---------------------------------------------------------------------------
+# Nearly invisible modifier letters
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "\u0645\u0640\u062d\u0645\u062f",  # Arabic name with a tatweel
+        "admin\u0640",
+        "\u07ca\u07fa\u07cb",  # NKo with a lajanyalan
+    ],
+)
+def test_stretching_letters_rejected(raw):
+    """Regression: tatweel and lajanyalan (Lm) passed as letters."""
+    with pytest.raises(ValueError):
+        validate_new_username(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "\u0645\u062d\u0645\u062f",  # the same Arabic name without it
+        "\u07ca\u07cb",
+        "a\u02b0",  # other modifier letters (Lm) stay allowed
+        "\u3005\u5009",  # Japanese iteration mark (Lm)
+    ],
+)
+def test_other_letters_still_allowed(raw):
+    assert validate_new_username(raw)
