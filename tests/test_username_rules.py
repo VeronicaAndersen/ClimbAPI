@@ -151,3 +151,43 @@ def test_real_change_is_validated():
     assert resolve_username_change("anna.s", "anna \U0001f338") == "anna.s"
     with pytest.raises(ValueError):
         resolve_username_change("anna \U0001f33a", "anna \U0001f338")
+
+
+
+# ---------------------------------------------------------------------------
+# Stacked combining marks: at most three on one letter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "stored"),
+    [
+        # Vietnamese, typed decomposed: NFKC composes it.
+        ("e\u0323\u0302", "\u1ec7"),
+        ("Nguye\u0302\u0303n", "nguy\u1ec5n"),
+        # Marks with no precomposed form stay separate: three are allowed.
+        ("x\u0301\u0302\u0303", "x\u0301\u0302\u0303"),
+        ("a\u0301\u0301\u0301", "\u00e1\u0301\u0301"),
+    ],
+)
+def test_up_to_three_marks_per_letter_allowed(raw, stored):
+    assert validate_new_username(raw) == stored
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "x\u0301\u0302\u0303\u0304",  # four marks on one letter
+        "a" + "\u0301" * 5,  # one composes, four stay
+        "ab" + "\u0300" * 4 + "c",
+        "a" + "\u0301" * 199,  # the old rule allowed these up to 200 characters
+    ],
+)
+def test_more_than_three_marks_per_letter_rejected(raw):
+    """Regression: stacked marks were unlimited ("zalgo" names)."""
+    with pytest.raises(ValueError, match="at most 3 accent marks"):
+        validate_new_username(raw)
+
+
+def test_mark_count_restarts_at_each_letter():
+    assert validate_new_username("x\u0301\u0302\u0303y\u0301\u0302\u0303")

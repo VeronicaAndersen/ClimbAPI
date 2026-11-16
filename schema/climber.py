@@ -48,6 +48,10 @@ _DEFAULT_IGNORABLE_RANGES = (
     (0xE0000, 0xE0FFF),
 )
 _NEW_USERNAME_PUNCTUATION = frozenset("._-@")
+# Enough for real text (Vietnamese uses up to two on one letter, and NFKC
+# composes most of them into one character); more is only good for
+# "zalgo" names that render as a tall smear over neighbouring text.
+_MAX_MARKS_PER_LETTER = 3
 NEW_USERNAME_RULE = (
     "username may only contain letters (with accents), digits, single spaces "
     "between words, and . _ - @"
@@ -64,8 +68,8 @@ def validate_new_username(username: str) -> str:
     Normalize a new username and check it against the strict rule.
 
     Returns the stored form, or raises ValueError with a message for the
-    client. Allowed after normalizing: letters (L*), combining marks (M*)
-    directly after a letter or another such mark, decimal digits (Nd), the
+    client. Allowed after normalizing: letters (L*), up to three combining
+    marks (M*) in a row directly after a letter, decimal digits (Nd), the
     characters . _ - @, and single ASCII spaces between other characters.
     Everything else is refused, as are Default_Ignorable code points.
     """
@@ -77,15 +81,22 @@ def validate_new_username(username: str) -> str:
     if normalized[0] == " " or normalized[-1] == " " or "  " in normalized:
         raise ValueError("username must not start or end with a space or contain double spaces")
     after_letter = False  # whether a combining mark is allowed here
+    marks_in_row = 0
     for char in normalized:
         category = unicodedata.category(char)
         if _is_default_ignorable(char):
             raise ValueError(NEW_USERNAME_RULE)
         if category.startswith("L"):
             after_letter = True
+            marks_in_row = 0
         elif category.startswith("M"):
+            marks_in_row += 1
             if not after_letter:
                 raise ValueError(NEW_USERNAME_RULE)
+            if marks_in_row > _MAX_MARKS_PER_LETTER:
+                raise ValueError(
+                    f"username may have at most {_MAX_MARKS_PER_LETTER} accent marks on one letter"
+                )
         elif category == "Nd" or char == " " or char in _NEW_USERNAME_PUNCTUATION:
             after_letter = False
         else:
