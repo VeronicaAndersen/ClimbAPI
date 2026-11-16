@@ -70,7 +70,7 @@ Everything else gets `422`: emoji and other symbols, other punctuation, line bre
 
 A profile update only applies the strict rule when the username actually changes. Resending the current username, even a legacy one that the rule would refuse, is accepted and leaves it as it is.
 
-**Finding existing accounts** (`/auth/login`, `/auth/token`, `/auth/password-reset/request`) stays lenient: trim and lowercase only, no NFKC and no allowlist. Empty names, names over 200 characters and names with control, format or surrogate characters are refused with the normal "invalid credentials" (or generic reset) answer, since no account can have them.
+**Finding existing accounts** (`/auth/login`, `/auth/token`, `/auth/password-reset/request`) stays lenient. The typed name is looked up in two forms in a single query: trimmed and lowercased (how every existing account is found, legacy names included), and trimmed, NFKC-normalized and lowercased (the stored form of names created under the rule above, so someone who signed up with a fullwidth or decomposed name can type it the same way again). If both match different accounts, the exact trimmed-and-lowercased match wins. There is no allowlist here. Empty names, names over 200 characters and names with control, format or surrogate characters are refused with the normal "invalid credentials" (or generic reset) answer, since no account can have them.
 
 ## Rate limiting
 
