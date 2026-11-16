@@ -25,6 +25,7 @@ from schema.climber import (
     ClimberCreate,
     contains_unstorable_characters,
     is_valid_normalized_username,
+    normalize_new_username,
     normalize_username,
 )
 from security.client_address import client_ip
@@ -56,11 +57,37 @@ PASSWORD_RESET_REQUESTED_MESSAGE = "Om e-postadressen finns i systemet har ett m
 router = APIRouter(prefix="/auth", tags=["auth"], route_class=RateLimitedRoute)
 
 
+async def find_climber_by_login_name(session: AsyncSession, raw_username: str) -> Climber | None:
+    """
+    The account a typed username refers to, for login and password reset.
+
+    Tries two forms in ONE query, so the number of queries does not reveal
+    whether an account exists:
+
+    * lenient (strip + lower): how every existing account is found, including
+      legacy names that are not NFKC-normalized;
+    * strict (strip + NFKC + lower): the stored form of names created under
+      the new-username rule, so "ａdmin" or a decomposed "josé" typed exactly
+      as at signup still finds the account.
+
+    An exact lenient match wins, so a legacy decomposed "josé" and a newer
+    precomposed "josé" each stay reachable when typed exactly.
+    """
+    lenient = normalize_username(raw_username)
+    strict = normalize_new_username(raw_username)
+    return await session.scalar(
+        select(Climber)
+        .where(Climber.username.in_((lenient, strict)))
+        .order_by((Climber.username == lenient).desc())
+        .limit(1)
+    )
+
+
 async def _check_credentials(
-    session: AsyncSession, username: str, password: str
+    session: AsyncSession, raw_username: str, password: str
 ) -> Climber | None:
     """The user if the password matches, else None."""
-    user = await session.scalar(select(Climber).where(Climber.username == username))
+    user = await find_climber_by_login_name(session, raw_username)
     if user is None:
         # Do the same hashing work as for a real user so response timing does
         # not reveal whether the username exists.
@@ -88,7 +115,9 @@ async def authenticate_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     # Stored usernames are normalized at signup, so match that form here and
-    # key the throttle on it, otherwise "Alice" and "alice" differ.
+    # key the throttle on it, otherwise "Alice" and "alice" differ. The raw
+    # input is kept for the lookup, which also tries the strict (NFKC) form.
+    raw_username = username
     username = normalize_username(username)
     # Check again after normalizing: trimming can empty a username ("   "),
     # lowercasing can lengthen one ("İ" becomes two characters), and control
@@ -107,7 +136,7 @@ async def authenticate_user(
         )
 
     try:
-        user = await _check_credentials(session, username, password)
+        user = await _check_credentials(session, raw_username, password)
     except Exception:
         # A database or hashing error is not a failed guess, so hand back this
         # request's reservation. asyncio.CancelledError is a BaseException and
@@ -199,7 +228,7 @@ async def request_password_reset(
     # answer exactly as for an unknown username.
     if not is_valid_normalized_username(username):
         return MessageResponse(message=PASSWORD_RESET_REQUESTED_MESSAGE)
-    user = await session.scalar(select(Climber).where(Climber.username == username))
+    user = await find_climber_by_login_name(session, body.username)
 
     if user and user.email:
         # Invalidate any existing unused tokens for this user
