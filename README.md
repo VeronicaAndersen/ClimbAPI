@@ -54,7 +54,7 @@ Mail settings are optional for local startup. Without configured mail credential
 
 There are two rules on purpose: a strict one for new usernames and a lenient one for finding existing accounts. Accounts created before the strict rule contain spaces, "@", accented letters and even emoji, and they must keep working.
 
-**New usernames** (signup, and a username that is set or changed in a profile update, including by an admin):
+**New usernames** (signup through `/auth/signup`, climbers an admin creates through the admin-only `POST /api/v1/climber`, and a username that is set or changed in a profile update, including by an admin):
 
 1. Normalize: trim surrounding whitespace, apply Unicode NFKC, then lowercase. The normalized form is what is stored.
 2. After normalizing, the name must be 1 to 200 characters long.

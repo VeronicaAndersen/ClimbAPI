@@ -62,9 +62,15 @@ async def apply_username_change(
 
 
 @router.post("", response_model=ClimberOut, status_code=status.HTTP_201_CREATED)
-async def create_climber(payload: ClimberCreate, session: Session):
+async def create_climber(payload: ClimberCreate, admin: AdminUser, session: Session):
+    """
+    Create a climber. Admin only; self-service signup is POST /auth/signup.
+
+    The admin check runs as a dependency, before this body, so an anonymous
+    or non-admin caller never reaches the username check below and cannot
+    learn from a 409 whether a username exists.
+    """
     await check_username_available(session, payload.username)
-    await check_email_available(session, payload.email)
 
     climber_data = payload.model_dump(exclude={'password'})
     climber = Climber(**climber_data, password=await hash_password_async(payload.password))
