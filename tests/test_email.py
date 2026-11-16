@@ -3,10 +3,27 @@
 import logging
 from typing import ClassVar
 
+import pytest
+
+from security.rate_limited_warning import RateLimitedWarning
 from services import email as email_service
 
 TOKEN = "live-reset-token-abc123"
 ADDRESS = "alice.private@example.com"
+
+
+@pytest.fixture(autouse=True)
+def fresh_mail_warnings(monkeypatch):
+    """
+    The send-time warnings are rate-limited module state; other tests that
+    request a reset would otherwise use up the first warning of the minute.
+    """
+    monkeypatch.setattr(
+        email_service,
+        "_warn_mail_not_configured",
+        RateLimitedWarning(email_service.logger, "Mail is not configured; reset email not sent"),
+    )
+    monkeypatch.setattr(email_service, "_invalid_config_warnings", {})
 
 
 async def test_unconfigured_mail_does_not_print_or_log_the_token(monkeypatch, capsys, caplog):
