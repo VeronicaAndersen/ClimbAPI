@@ -60,17 +60,17 @@ There are two rules on purpose: a strict one for new usernames and a lenient one
 2. After normalizing, the name must be 1 to 200 characters long.
 3. Every character must be one of:
    - a letter (Unicode categories L*), including accented letters such as å, ä, ö, é, ø;
-   - a combining mark (M*) directly after a letter or after another such mark;
+   - a combining mark (M*) directly after a letter, at most three in a row (enough for Vietnamese; NFKC composes most accents into one character anyway);
    - a decimal digit (Nd);
    - one of `.` `_` `-` `@`;
    - a plain space (U+0020), but not at the start or end and never two in a row.
-4. Default_Ignorable code points are refused even if they are letters or marks (for example Hangul fillers and variation selectors).
+4. Default_Ignorable code points are refused even if they are letters or marks (for example Hangul fillers and variation selectors), as are the nearly invisible stretching letters U+0640 (Arabic tatweel) and U+07FA (NKo lajanyalan).
 
 Everything else gets `422`: emoji and other symbols, other punctuation, line breaks, control, format (zero-width, bidi), private-use and unassigned characters. Because NFKC folds look-alikes, a fullwidth `ａdmin` is stored as `admin` and a decomposed `josé` as the precomposed one, so they collide with an existing account and get `409 Username is already taken`. NFKC also turns NBSP, the ideographic space and other space variants into a plain space, so a single one between words is accepted. Mixed scripts (for example a Cyrillic letter among Latin ones) are allowed for now.
 
-A profile update only applies the strict rule when the username actually changes. Resending the current username, even a legacy one that the rule would refuse, is accepted and leaves it as it is.
+A profile update only applies the strict rule when the username actually changes. Resending the current username, even a legacy one that the rule would refuse, is accepted and leaves it as it is. A changed username is normalized from the input exactly as at signup, so a rename and a signup with the same input store the same name.
 
-**Finding existing accounts** (`/auth/login`, `/auth/token`, `/auth/password-reset/request`) stays lenient. The typed name is looked up in two forms in a single query: trimmed and lowercased (how every existing account is found, legacy names included), and trimmed, NFKC-normalized and lowercased (the stored form of names created under the rule above, so someone who signed up with a fullwidth or decomposed name can type it the same way again). If both match different accounts, the exact trimmed-and-lowercased match wins. There is no allowlist here. Empty names, names over 200 characters and names with control, format or surrogate characters are refused with the normal "invalid credentials" (or generic reset) answer, since no account can have them.
+**Finding existing accounts** (`/auth/login`, `/auth/token`, `/auth/password-reset/request`) stays lenient. The typed name is looked up in two forms in a single query: trimmed and lowercased (how every existing account is found, legacy names included), and trimmed, NFKC-normalized and lowercased (the stored form of names created under the rule above, so someone who signed up with a fullwidth or decomposed name can type it the same way again). If both match different accounts, the exact trimmed-and-lowercased match wins. The production data was audited when this was introduced: no stored username differs from its NFKC form, so no existing account can shadow a newer look-alike, and the strict rule means no new non-NFKC usernames can be created. There is no allowlist here. Empty names, names over 200 characters and names with control, format or surrogate characters are refused with the normal "invalid credentials" (or generic reset) answer, since no account can have them.
 
 ## Rate limiting
 
@@ -88,7 +88,7 @@ The auth endpoints are rate limited per client IP, and failed logins are also li
 | `LOGIN_MAX_FAILURES_PER_USERNAME` | `50` | Failed logins per username across all IPs; past this, every IP that has failed on the username is blocked |
 | `LOGIN_MAX_FAILURES_PER_USERNAME_PREFIX` | `15` | Failed logins per username from one IPv6 /48; past this, every address in that /48 is blocked for the username, including ones that have not failed. A successful login does not reset it. IPv4 is not affected |
 | `LOGIN_MAX_USERNAMES_PER_CLIENT` | `20` | Distinct usernames one client may have recent failures on; past this it gets `429` for new usernames. Only enforced while the throttle is under pressure |
-| `LOGIN_THROTTLE_MAX_TRACKED` | `200000` | Entries kept per throttle counter. A failed login costs about 550-750 bytes from IPv4 and up to about 1 KB from IPv6 (short to 200-character usernames), so at most about 210 MB when full |
+| `LOGIN_THROTTLE_MAX_TRACKED` | `200000` | Entries kept per throttle counter. A failed login costs about 550-750 bytes from IPv4 and up to about 1 KB from IPv6 (short to 200-character usernames; a key is never longer than 200 characters, even when NFKC expands the typed name), so at most about 210 MB when full |
 | `LOGIN_THROTTLE_PRESSURE_RATIO` | `0.1` | The throttle counts as under pressure once a counter holds this share of `LOGIN_THROTTLE_MAX_TRACKED` (20,000 keys by default). `0` enforces the per-client cap always, `1` only when full |
 | `LOGIN_FAILURE_WINDOW_SECONDS` | `900` | Sliding window for all failure limits |
 
