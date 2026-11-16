@@ -50,6 +50,28 @@ python -m pytest -q
 
 Mail settings are optional for local startup. Without configured mail credentials no reset email is sent: the API logs a warning (at most once a minute) and still answers the request normally. The reset link is never printed or logged, because it contains a live token. To try the reset flow locally, point the `MAIL_*` settings at a local SMTP catcher such as [Mailpit](https://mailpit.axllent.org/).
 
+## Usernames
+
+There are two rules on purpose: a strict one for new usernames and a lenient one for finding existing accounts. Accounts created before the strict rule contain spaces, "@", accented letters and even emoji, and they must keep working.
+
+**New usernames** (signup, and a username that is set or changed in a profile update, including by an admin):
+
+1. Normalize: trim surrounding whitespace, apply Unicode NFKC, then lowercase. The normalized form is what is stored.
+2. After normalizing, the name must be 1 to 200 characters long.
+3. Every character must be one of:
+   - a letter (Unicode categories L*), including accented letters such as å, ä, ö, é, ø;
+   - a combining mark (M*) directly after a letter or after another such mark;
+   - a decimal digit (Nd);
+   - one of `.` `_` `-` `@`;
+   - a plain space (U+0020), but not at the start or end and never two in a row.
+4. Default_Ignorable code points are refused even if they are letters or marks (for example Hangul fillers and variation selectors).
+
+Everything else gets `422`: emoji and other symbols, other punctuation, line breaks, control, format (zero-width, bidi), private-use and unassigned characters. Because NFKC folds look-alikes, a fullwidth `ａdmin` is stored as `admin` and a decomposed `josé` as the precomposed one, so they collide with an existing account and get `409 Username is already taken`. NFKC also turns NBSP, the ideographic space and other space variants into a plain space, so a single one between words is accepted. Mixed scripts (for example a Cyrillic letter among Latin ones) are allowed for now.
+
+A profile update only applies the strict rule when the username actually changes. Resending the current username, even a legacy one that the rule would refuse, is accepted and leaves it as it is.
+
+**Finding existing accounts** (`/auth/login`, `/auth/token`, `/auth/password-reset/request`) stays lenient: trim and lowercase only, no NFKC and no allowlist. Empty names, names over 200 characters and names with control, format or surrogate characters are refused with the normal "invalid credentials" (or generic reset) answer, since no account can have them.
+
 ## Rate limiting
 
 The auth endpoints are rate limited per client IP, and failed logins are also limited per username. IPv6 clients are grouped by their /64 network, since one customer usually controls a whole /64; IPv6 addresses that embed an IPv4 address (IPv4-mapped `::ffff:a.b.c.d`, 6to4 `2002::/16`, NAT64 `64:ff9b::/96` and the deprecated IPv4-compatible `::a.b.c.d`) count as that IPv4 address. When a limit is hit the API returns `429 Too Many Requests` with a generic message and a `Retry-After` header (seconds).
