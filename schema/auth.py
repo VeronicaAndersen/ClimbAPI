@@ -1,7 +1,9 @@
 from pydantic import BaseModel, constr
 
-# Shared with the climber schemas so signup and login accept the same input.
+# Shared with the climber schemas so signup, login and password reset accept
+# the same input.
 USERNAME_MAX_LENGTH = 200
+PASSWORD_MIN_LENGTH = 6
 PASSWORD_MAX_LENGTH = 1024
 
 
@@ -26,7 +28,9 @@ class PasswordResetRequest(BaseModel):
 
 class PasswordResetConfirm(BaseModel):
     token: str
-    new_password: str
+    # Same rule as signup: a reset must not set a password signup would refuse,
+    # or one too long for login to accept.
+    new_password: constr(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
 
 
 class MessageResponse(BaseModel):

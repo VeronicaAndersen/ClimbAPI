@@ -488,3 +488,50 @@ class TestLoneSurrogatesInTextFields:
         )
         assert resp.status_code == 400
         assert resp.json() == {"detail": "Invalid or expired reset token"}
+
+
+class TestPasswordResetConfirmPasswordRules:
+    """The new password follows the signup rule: 6 to 1024 characters."""
+
+    async def _issue_token(self, client, engine, username="resetrules") -> str:
+        from datetime import UTC, datetime, timedelta
+
+        from db.models import PasswordResetToken
+
+        resp = await signup(client, username=username)
+        climber_id = resp.json()["climber"]["id"]
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            session.add(
+                PasswordResetToken(
+                    user_id=climber_id,
+                    token="valid-reset-token",
+                    expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
+                )
+            )
+            await session.commit()
+        return "valid-reset-token"
+
+    @pytest.mark.parametrize("new_password", ["", "x", "12345", "p" * 1025])
+    async def test_password_outside_signup_limits_is_rejected(
+        self, client, engine, new_password
+    ):
+        """Regression: any length was accepted, e.g. a 1-character password."""
+        token = await self._issue_token(client, engine)
+        resp = await client.post(
+            f"{BASE}/auth/password-reset/confirm",
+            json={"token": token, "new_password": new_password},
+        )
+        assert resp.status_code == 422
+        # The token was not used up, and the old password still works.
+        assert (await login(client, username="resetrules")).status_code == 200
+
+    @pytest.mark.parametrize("new_password", ["123456", "p" * 1024])
+    async def test_password_within_limits_resets_it(self, client, engine, new_password):
+        token = await self._issue_token(client, engine)
+        resp = await client.post(
+            f"{BASE}/auth/password-reset/confirm",
+            json={"token": token, "new_password": new_password},
+        )
+        assert resp.status_code == 200
+        assert (await login(client, username="resetrules", password=new_password)).status_code == 200
+        assert (await login(client, username="resetrules")).status_code == 401
