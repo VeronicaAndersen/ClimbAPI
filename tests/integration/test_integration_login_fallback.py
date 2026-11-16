@@ -147,3 +147,40 @@ class TestLookupQueryCount:
             client.post(f"{BASE}/auth/password-reset/request", json={"username": "nobody"}),
         )
         assert existing == unknown == 1
+
+
+class TestThrottleSharesKeyAcrossVariants:
+    """Every form that reaches an account counts against one throttle key."""
+
+    @pytest.fixture(autouse=True)
+    def throttle_on(self, monkeypatch):
+        from security.login_throttle import login_throttle
+        from security.rate_limit import limiter
+
+        monkeypatch.setattr(limiter, "enabled", True)
+        monkeypatch.setattr(login_throttle, "enabled", True)
+
+    async def test_failures_spread_over_fullwidth_variants_share_the_limit(self, client):
+        """
+        Regression: keyed on the lenient form, "admin", fullwidth "admin" and
+        each mixed variant had their own counters, multiplying the limits.
+        """
+        from security.rate_limit import rate_limit_settings
+
+        assert rate_limit_settings.LOGIN_MAX_FAILURES == 5
+        await signup(client, "admin")
+        variants = ["admin", "\uff41dmin", "a\uff44min", "ad\uff4din", "adm\uff49n"]
+        for variant in variants:
+            assert (await login(client, variant, "wrong-pw")).status_code == 401
+        # Any variant, even with the correct password, is now refused.
+        for typed in ("admin", "admi\uff4e"):
+            resp = await login(client, typed)
+            assert resp.status_code == 429
+            assert int(resp.headers["Retry-After"]) >= 1
+
+    async def test_token_endpoint_shares_the_same_key(self, client):
+        await signup(client, "admin")
+        for _ in range(5):
+            assert (await login(client, "\uff41dmin", "wrong-pw")).status_code == 401
+        resp = await token_login(client, "admin")
+        assert resp.status_code == 429

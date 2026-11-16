@@ -114,9 +114,8 @@ async def authenticate_user(
     if len(username) > USERNAME_MAX_LENGTH or len(password) > PASSWORD_MAX_LENGTH:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    # Stored usernames are normalized at signup, so match that form here and
-    # key the throttle on it, otherwise "Alice" and "alice" differ. The raw
-    # input is kept for the lookup, which also tries the strict (NFKC) form.
+    # The raw input is kept for the lookup, which tries the lenient and the
+    # strict (NFKC) form; see find_climber_by_login_name.
     raw_username = username
     username = normalize_username(username)
     # Check again after normalizing: trimming can empty a username ("   "),
@@ -125,9 +124,16 @@ async def authenticate_user(
     # rules to the normalized form, so no stored account matches.
     if not is_valid_normalized_username(username):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    # The throttle is keyed on the strict (NFKC) form: the lookup also matches
+    # it, so "admin" and fullwidth or mixed variants of it all reach the same
+    # account and must share one set of counters. Keyed on the lenient form,
+    # each of the 2^n variants of an n-letter name would get its own limits.
+    # Legacy names map to their NFKC key too, which is conservative (a legacy
+    # decomposed "jose" and a new precomposed one share limits).
+    throttle_key = normalize_new_username(raw_username)
     # Reserved up front so concurrent guesses cannot all pass the check; it
     # stays recorded as a failure for this client unless the login succeeds.
-    reservation = login_throttle.acquire(username, client_address)
+    reservation = login_throttle.acquire(throttle_key, client_address)
     if isinstance(reservation, int):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
