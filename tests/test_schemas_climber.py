@@ -64,9 +64,11 @@ class TestClimberUpdate:
         assert c.lastname is None
         assert c.club is None
 
-    def test_username_lowercased_when_provided(self):
-        c = ClimberUpdate(username="JohnDoe")
-        assert c.username == "johndoe"
+    def test_username_kept_as_typed_but_trimmed(self):
+        # Normalized by the endpoint (resolve_username_change), from the raw
+        # input, so a rename stores the same form as signup.
+        c = ClimberUpdate(username="  JohnDoe ")
+        assert c.username == "JohnDoe"
 
     def test_email_normalized_when_provided(self):
         c = ClimberUpdate(email="  USER@EXAMPLE.COM  ")
@@ -96,9 +98,9 @@ class TestAdminClimberUpdate:
         c = AdminClimberUpdate()
         assert c.user_scope is None
 
-    def test_inherits_username_normalization(self):
+    def test_inherits_username_handling(self):
         c = AdminClimberUpdate(username="  ADMIN  ", user_scope="admin")
-        assert c.username == "admin"
+        assert c.username == "ADMIN"
 
     def test_can_set_climber_scope(self):
         c = AdminClimberUpdate(user_scope="climber")

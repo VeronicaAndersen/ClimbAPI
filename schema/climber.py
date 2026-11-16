@@ -100,7 +100,8 @@ def resolve_username_change(requested: str, current: str) -> str | None:
     A client may resend the account's current username, which can be a
     legacy one that the strict rule would refuse. That is not a change, so it
     is compared leniently first and never rejected. Only a real change is
-    validated as a new username (ValueError if it fails).
+    validated as a new username (ValueError if it fails), from the raw input
+    exactly as at signup, so both store the same form.
     """
     if normalize_username(requested) == current:
         return None
@@ -251,12 +252,17 @@ class ClimberUpdate(BaseModel):
     @classmethod
     def lenient_username(cls, v: str | None) -> str | None:
         """
-        Only the lenient form and checks here (strip + lower, length, no
-        Cc/Cf/Cs): whether the username actually changes depends on the
-        stored one, so the endpoint applies the strict rule through
-        resolve_username_change().
+        Only the lenient checks here (length, no Cc/Cf/Cs); the value is
+        returned trimmed but otherwise as typed. Whether the username actually
+        changes depends on the stored one, so the endpoint applies the strict
+        rule through resolve_username_change(). That function must see the
+        raw input: lowercasing before NFKC can give a different result than
+        signup does (U+03F9 becomes "s" via final sigma instead of sigma).
         """
-        return _normalized_username_within_limit(v) if v else v
+        if v:
+            _normalized_username_within_limit(v)
+            return v.strip()
+        return v
 
     @field_validator('firstname', 'lastname')
     @classmethod

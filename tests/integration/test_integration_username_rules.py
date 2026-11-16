@@ -216,3 +216,51 @@ class TestUsernameUpdates:
         )
         assert resp.status_code == 200
         assert await stored_username(engine, target) == "anna s"
+
+
+
+# ---------------------------------------------------------------------------
+# A rename stores exactly what signup would store for the same input
+# ---------------------------------------------------------------------------
+
+# Lowercasing before NFKC turns these Greek sigmas into a final sigma, while
+# signup (NFKC first) gives a normal sigma.
+SIGMA_INPUTS = ["\u03f9limber", "\u0391\u03a3\u02b0", "x\u03f9"]
+
+
+class TestRenameMatchesSignup:
+    @pytest.mark.parametrize("typed", SIGMA_INPUTS)
+    async def test_signup_stores_the_strict_form(self, client, typed):
+        from schema.climber import validate_new_username
+
+        resp = await signup(client, typed)
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["climber"]["username"] == validate_new_username(typed)
+
+    @pytest.mark.parametrize("typed", SIGMA_INPUTS)
+    async def test_rename_stores_the_same_form_and_can_log_in(self, client, engine, typed):
+        """Regression: the update schema lowercased first, so rename stored a final sigma."""
+        from schema.climber import validate_new_username
+
+        climber_id = await create_legacy_climber(engine, "renamer")
+        headers = await auth_headers(client, "renamer")
+        resp = await client.patch(
+            f"{BASE}/climber/me", json={"username": typed}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert await stored_username(engine, climber_id) == validate_new_username(typed)
+        # The user logs in by typing the same input again.
+        assert (await login(client, typed)).status_code == 200
+
+    async def test_admin_rename_stores_the_same_form(self, client, engine):
+        from schema.climber import validate_new_username
+
+        await create_legacy_climber(engine, "boss", scope=UserScope.admin)
+        target = await create_legacy_climber(engine, "target")
+        headers = await auth_headers(client, "boss")
+        typed = SIGMA_INPUTS[1]
+        resp = await client.patch(
+            f"{BASE}/climber/{target}", json={"username": typed}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert await stored_username(engine, target) == validate_new_username(typed)
