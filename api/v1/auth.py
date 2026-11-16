@@ -130,7 +130,12 @@ async def authenticate_user(
     # each of the 2^n variants of an n-letter name would get its own limits.
     # Legacy names map to their NFKC key too, which is conservative (a legacy
     # decomposed "jose" and a new precomposed one share limits).
-    throttle_key = normalize_new_username(raw_username)
+    # NFKC can expand a name a lot (U+FDFA becomes 18 characters), and an
+    # unbounded key would break the throttle's memory bound. No account can
+    # be stored under a strict form longer than the limit, so fall back to
+    # the lenient form, which was checked above.
+    strict = normalize_new_username(raw_username)
+    throttle_key = strict if len(strict) <= USERNAME_MAX_LENGTH else username
     # Reserved up front so concurrent guesses cannot all pass the check; it
     # stays recorded as a failure for this client unless the login succeeds.
     reservation = login_throttle.acquire(throttle_key, client_address)

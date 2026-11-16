@@ -184,3 +184,20 @@ class TestThrottleSharesKeyAcrossVariants:
             assert (await login(client, "\uff41dmin", "wrong-pw")).status_code == 401
         resp = await token_login(client, "admin")
         assert resp.status_code == 429
+
+
+    async def test_throttle_key_is_capped_when_nfkc_expands_the_name(self, client):
+        """
+        Regression: U+FDFA expands to 18 characters under NFKC, so 200 of them
+        made a 3,600-character throttle key, breaking the memory bound.
+        """
+        from schema.auth import USERNAME_MAX_LENGTH
+        from security.login_throttle import login_throttle
+
+        typed = "\ufdfa" * 200
+        assert (await login(client, typed, "wrong-pw")).status_code == 401
+        keys = list(login_throttle._by_client._entries) + list(
+            login_throttle._by_username._entries
+        )
+        assert keys
+        assert all(len(key[0] if isinstance(key, tuple) else key) <= USERNAME_MAX_LENGTH for key in keys)
