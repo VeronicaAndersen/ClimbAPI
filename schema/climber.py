@@ -12,9 +12,100 @@ from schema.auth import (
 )
 
 
+# Two username rules, on purpose:
+#
+# * New usernames (signup, and a username that is set or changed through a
+#   profile update) follow a strict rule: normalize_new_username() then
+#   validate_new_username(). NFKC folds look-alikes (fullwidth "ａdmin",
+#   decomposed "josé") into one stored form, so the UNIQUE constraint rejects
+#   them as duplicates, and an allowlist keeps out emoji, symbols, invisible
+#   and control characters.
+# * Lookups (login, /token, password-reset request) stay lenient:
+#   normalize_username() (strip + lower, no NFKC) and
+#   is_valid_normalized_username() (length, and no Cc/Cf/Cs). Existing
+#   accounts were created before the strict rule and include spaces, "@",
+#   non-NFKC forms and emoji; they must keep logging in.
+
+
 def normalize_username(username: str) -> str:
-    """Canonical form of a username: trimmed and lowercased, as stored."""
+    """Lenient lookup form (login, password reset): trimmed and lowercased."""
     return username.strip().lower()
+
+
+def normalize_new_username(username: str) -> str:
+    """Stored form of a new username: strip, NFKC, then lowercase."""
+    return unicodedata.normalize("NFKC", username.strip()).lower()
+
+
+# Unicode Default_Ignorable_Code_Point (DerivedCoreProperties.txt). Most are
+# Cf or unassigned, but some are letters or marks (Hangul fillers are Lo,
+# variation selectors are Mn), so they need their own check.
+_DEFAULT_IGNORABLE_RANGES = (
+    (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160),
+    (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E),
+    (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
+_NEW_USERNAME_PUNCTUATION = frozenset("._-@")
+NEW_USERNAME_RULE = (
+    "username may only contain letters (with accents), digits, single spaces "
+    "between words, and . _ - @"
+)
+
+
+def _is_default_ignorable(char: str) -> bool:
+    code = ord(char)
+    return any(low <= code <= high for low, high in _DEFAULT_IGNORABLE_RANGES)
+
+
+def validate_new_username(username: str) -> str:
+    """
+    Normalize a new username and check it against the strict rule.
+
+    Returns the stored form, or raises ValueError with a message for the
+    client. Allowed after normalizing: letters (L*), combining marks (M*)
+    directly after a letter or another such mark, decimal digits (Nd), the
+    characters . _ - @, and single ASCII spaces between other characters.
+    Everything else is refused, as are Default_Ignorable code points.
+    """
+    normalized = normalize_new_username(username)
+    if not normalized:
+        raise ValueError("username must not be empty or only whitespace")
+    if len(normalized) > USERNAME_MAX_LENGTH:
+        raise ValueError(f"username must be at most {USERNAME_MAX_LENGTH} characters")
+    if normalized[0] == " " or normalized[-1] == " " or "  " in normalized:
+        raise ValueError("username must not start or end with a space or contain double spaces")
+    after_letter = False  # whether a combining mark is allowed here
+    for char in normalized:
+        category = unicodedata.category(char)
+        if _is_default_ignorable(char):
+            raise ValueError(NEW_USERNAME_RULE)
+        if category.startswith("L"):
+            after_letter = True
+        elif category.startswith("M"):
+            if not after_letter:
+                raise ValueError(NEW_USERNAME_RULE)
+        elif category == "Nd" or char == " " or char in _NEW_USERNAME_PUNCTUATION:
+            after_letter = False
+        else:
+            raise ValueError(NEW_USERNAME_RULE)
+    return normalized
+
+
+def resolve_username_change(requested: str, current: str) -> str | None:
+    """
+    The username to store for a profile update, or None if it is unchanged.
+
+    A client may resend the account's current username, which can be a
+    legacy one that the strict rule would refuse. That is not a change, so it
+    is compared leniently first and never rejected. Only a real change is
+    validated as a new username (ValueError if it fails).
+    """
+    if normalize_username(requested) == current:
+        return None
+    new_username = validate_new_username(requested)
+    return None if new_username == current else new_username
 
 
 def contains_control_characters(value: str) -> bool:
@@ -119,9 +210,9 @@ class ClimberCreate(BaseModel):
 
     @field_validator('username')
     @classmethod
-    def trim_lowercase_username(cls, v: str) -> str:
-        """Trim and lowercase username."""
-        return _normalized_username_within_limit(v) if v else v
+    def new_username(cls, v: str) -> str:
+        """A new account gets a username that follows the strict rule."""
+        return validate_new_username(v)
 
     @field_validator('firstname', 'lastname')
     @classmethod
@@ -158,8 +249,13 @@ class ClimberUpdate(BaseModel):
 
     @field_validator('username')
     @classmethod
-    def trim_lowercase_username(cls, v: Optional[str]) -> Optional[str]:
-        """Trim and lowercase username."""
+    def lenient_username(cls, v: str | None) -> str | None:
+        """
+        Only the lenient form and checks here (strip + lower, length, no
+        Cc/Cf/Cs): whether the username actually changes depends on the
+        stored one, so the endpoint applies the strict rule through
+        resolve_username_change().
+        """
         return _normalized_username_within_limit(v) if v else v
 
     @field_validator('firstname', 'lastname')
