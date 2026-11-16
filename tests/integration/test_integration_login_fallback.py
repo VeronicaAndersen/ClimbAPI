@@ -201,3 +201,31 @@ class TestThrottleSharesKeyAcrossVariants:
         )
         assert keys
         assert all(len(key[0] if isinstance(key, tuple) else key) <= USERNAME_MAX_LENGTH for key in keys)
+
+
+    async def test_variants_count_as_one_username_toward_the_client_cap(
+        self, client, monkeypatch
+    ):
+        """
+        Fullwidth variants of one name share a key, so they use one slot of
+        LOGIN_MAX_USERNAMES_PER_CLIENT, not one each.
+        """
+        from security.login_throttle import login_throttle
+
+        # Enforce the per-client cap always (pressure_ratio=0), with room for
+        # two usernames.
+        monkeypatch.setattr(login_throttle, "pressure_threshold", 0)
+        monkeypatch.setattr(login_throttle, "max_usernames_per_client", 2)
+
+        await signup(client, "admin")
+        variants = ["admin", "\uff41dmin", "a\uff44min", "ad\uff4din"]
+        for variant in variants:
+            assert (await login(client, variant, "wrong-pw")).status_code == 401
+        assert login_throttle._usernames_per_client == {"127.0.0.1": 1}
+
+        # A second, different username still fits under the cap...
+        assert (await login(client, "bob", "wrong-pw")).status_code == 401
+        assert login_throttle._usernames_per_client == {"127.0.0.1": 2}
+        # ...a third one does not.
+        resp = await login(client, "carol", "wrong-pw")
+        assert resp.status_code == 429
