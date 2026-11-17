@@ -441,3 +441,80 @@ async def test_cancel_during_cleanup_logs_original_error_type(monkeypatch, caplo
     assert "Request cancelled during cleanup after IntegrityError" in caplog.text
     assert SECRET not in caplog.text
     assert "DETAIL" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Database URL resolution (Neon's libpq-style DATABASE_URL)
+# ---------------------------------------------------------------------------
+
+NEON_POOLED = (
+    "postgresql://user:pw@ep-x-pooler.c-1.eu-central-1.aws.neon.tech/neondb"
+    "?sslmode=require&channel_binding=require"
+)
+
+
+def test_libpq_url_is_converted_for_asyncpg():
+    url = config.asyncpg_url_from_libpq(NEON_POOLED)
+    assert url.drivername == "postgresql+asyncpg"
+    assert dict(url.query) == {"ssl": "require"}
+    assert url.host == "ep-x-pooler.c-1.eu-central-1.aws.neon.tech"
+    assert url.password == "pw"
+
+
+def test_postgres_scheme_alias_is_converted():
+    url = config.asyncpg_url_from_libpq("postgres://u:p@localhost/db?sslmode=disable")
+    assert url.drivername == "postgresql+asyncpg"
+    assert dict(url.query) == {"ssl": "disable"}
+
+
+def test_async_database_url_wins(monkeypatch):
+    monkeypatch.setenv("ASYNC_DATABASE_URL", "postgresql+asyncpg://a:b@local/x")
+    monkeypatch.setenv("DATABASE_URL", NEON_POOLED)
+    url = config.database_url_from_env()
+    assert url.render_as_string(hide_password=False) == "postgresql+asyncpg://a:b@local/x"
+
+
+def test_libpq_params_in_async_database_url_are_converted(monkeypatch):
+    monkeypatch.setenv("ASYNC_DATABASE_URL", NEON_POOLED)
+    url = config.database_url_from_env()
+    assert url.drivername == "postgresql+asyncpg"
+    assert "sslmode" not in url.query
+    assert "channel_binding" not in url.query
+    assert url.query["ssl"] == "require"
+
+
+def test_non_postgres_async_database_url_is_untouched(monkeypatch):
+    monkeypatch.setenv("ASYNC_DATABASE_URL", "sqlite+aiosqlite:///./x.db")
+    assert config.database_url_from_env() == "sqlite+aiosqlite:///./x.db"
+
+
+def test_database_url_used_when_async_url_missing(monkeypatch):
+    monkeypatch.delenv("ASYNC_DATABASE_URL", raising=False)
+    monkeypatch.setenv("DATABASE_URL", NEON_POOLED)
+    assert config.database_url_from_env().drivername == "postgresql+asyncpg"
+
+
+def test_sqlite_fallback(monkeypatch):
+    monkeypatch.delenv("ASYNC_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("VERCEL", raising=False)
+    assert config.database_url_from_env() == config.SQLITE_FALLBACK_URL
+
+
+def test_missing_database_url_on_vercel_fails_clearly(monkeypatch):
+    monkeypatch.delenv("ASYNC_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("VERCEL", "1")
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
+        config.database_url_from_env()
+
+
+def test_pooled_host_disables_statement_caches():
+    args = config.connect_args_for(config.asyncpg_url_from_libpq(NEON_POOLED))
+    assert args["statement_cache_size"] == 0
+    assert args["prepared_statement_cache_size"] == 0
+    assert args["prepared_statement_name_func"]() != args["prepared_statement_name_func"]()
+
+
+def test_direct_host_keeps_default_connect_args():
+    assert config.connect_args_for("postgresql+asyncpg://u:p@ep-x.neon.tech/db") == {}

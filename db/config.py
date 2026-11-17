@@ -1,8 +1,10 @@
 import asyncio
 from collections.abc import Coroutine
 from dataclasses import dataclass
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from typing import Any, AsyncIterator
+from uuid import uuid4
 import logging
 import os
 
@@ -26,12 +28,71 @@ def _cleanup_timeout_from_env() -> float:
 # not hold the request (and its worker slot) forever.
 CLEANUP_TIMEOUT_SECONDS = _cleanup_timeout_from_env()
 
-DATABASE_URL = os.getenv("ASYNC_DATABASE_URL") or "sqlite+aiosqlite:///./greppapi.db"
-if not os.getenv("ASYNC_DATABASE_URL"):
-    os.environ["ASYNC_DATABASE_URL"] = DATABASE_URL
+SQLITE_FALLBACK_URL = "sqlite+aiosqlite:///./greppapi.db"
+
+
+def asyncpg_url_from_libpq(raw: str) -> URL:
+    """
+    Convert a libpq-style URL (such as Neon's DATABASE_URL) for asyncpg.
+
+    asyncpg takes ``ssl`` instead of ``sslmode`` and rejects
+    ``channel_binding`` as an unknown keyword argument.
+    """
+    url = make_url(raw)
+    query = dict(url.query)
+    sslmode = query.pop("sslmode", None)
+    query.pop("channel_binding", None)
+    if sslmode is not None:
+        query["ssl"] = sslmode
+    return url.set(drivername="postgresql+asyncpg", query=query)
+
+
+def database_url_from_env() -> str | URL:
+    """
+    ASYNC_DATABASE_URL wins; otherwise DATABASE_URL (for example the pooled
+    Neon URL written by `neon env pull`) is used. Postgres URLs from either
+    variable are converted for asyncpg; otherwise a local SQLite file is used.
+    """
+    explicit = os.getenv("ASYNC_DATABASE_URL")
+    if explicit:
+        # A Neon URL pasted here still carries libpq params asyncpg rejects.
+        if make_url(explicit).get_backend_name() == "postgresql":
+            return asyncpg_url_from_libpq(explicit)
+        return explicit
+    libpq = os.getenv("DATABASE_URL")
+    if libpq:
+        return asyncpg_url_from_libpq(libpq)
+    if os.getenv("VERCEL"):
+        # Serverless has a read-only, ephemeral filesystem and no aiosqlite;
+        # a silent SQLite fallback would only fail later with a confusing error.
+        raise RuntimeError(
+            "No database configured: set DATABASE_URL or ASYNC_DATABASE_URL "
+            "in the Vercel project's environment variables."
+        )
+    return SQLITE_FALLBACK_URL
+
+
+def connect_args_for(url: str | URL) -> dict[str, Any]:
+    """
+    Neon's pooled endpoint (``-pooler`` host) is PgBouncer in transaction
+    mode: the next statement may run on another server connection, so
+    asyncpg must not cache prepared statements and must name them uniquely.
+    """
+    host = make_url(url).host or ""
+    if "-pooler." not in host:
+        return {}
+    return {
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
+        "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
+    }
+
+
+DATABASE_URL = database_url_from_env()
 
 async_engine = create_async_engine(
     DATABASE_URL,
+    connect_args=connect_args_for(DATABASE_URL),
     pool_size=5,
     max_overflow=10,
     pool_pre_ping=True,
