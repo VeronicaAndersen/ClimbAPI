@@ -109,6 +109,7 @@ Counters are kept in memory, which works because the container runs a single uvi
 | Environment variable | Default | Meaning |
 |---|---|---|
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1,::1` | Comma-separated IPs or CIDR ranges of your reverse proxy, for example `10.0.0.0/8` |
+| `TRUST_VERCEL_HEADERS` | `false` | On Vercel only (requires `VERCEL=1`): take the client IP from the `x-real-ip` header |
 
 Set it to your proxy's address or network. Do not use `*` unless the container can only be reached through the proxy, because any client could then forge its IP. Outside Docker, pass the same flags yourself:
 
@@ -117,6 +118,8 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8080 --proxy-headers --forwarde
 ```
 
 Without this, every request appears to come from the proxy and all clients share one budget. If the app sees a missing or non-IP client address, it uses one shared `unknown` key for all such clients and logs a warning (at most once a minute, without the address).
+
+**On Vercel** there is no uvicorn in front to configure, and the connection address belongs to the platform. Set `TRUST_VERCEL_HEADERS=true` there: the client IP is then taken from the `x-real-ip` header, which Vercel's edge sets (replacing any value the client sent), and the connection address is ignored. The header must hold exactly one IP address; a list, a port, anything else or a missing header gives the shared `unknown` key and the same rate-limited warning, never the connection address. The same IPv6 /64 and /48 grouping and IPv4 mapping apply as above. The app refuses to start with `TRUST_VERCEL_HEADERS=true` unless `VERCEL=1` (set by Vercel itself), because anywhere else clients could choose their own rate-limit key with that header. `FORWARDED_ALLOW_IPS` only affects uvicorn and is not used on Vercel.
 
 Each request's database session is rolled back (after an error) and closed even if the request is cancelled. `DB_CLEANUP_TIMEOUT_SECONDS` (default `10`) bounds each of those steps; if one times out, the session's connections are invalidated instead of being returned to the pool, and only the error type is logged.
 

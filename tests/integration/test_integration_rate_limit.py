@@ -125,6 +125,39 @@ class TestLoginIpRateLimit:
             assert (await login(c)).status_code == 200
 
 
+class TestVercelClientIp:
+    """Same connection address, different x-real-ip: as on Vercel's edge."""
+
+    async def _exhaust_then_try_other(self, client):
+        edge = ASGITransport(app=app, client=("10.0.0.99", 40000))
+        async with AsyncClient(transport=edge, base_url="http://test") as proxy:
+            first = {"x-real-ip": "203.0.113.10"}
+            for i in range(10):
+                resp = await proxy.post(
+                    f"{BASE}/auth/login",
+                    json={"username": f"nobody{i}", "password": "secret123"},
+                    headers=first,
+                )
+                assert resp.status_code == 401
+            return await proxy.post(
+                f"{BASE}/auth/login",
+                json={"username": "other", "password": "secret123"},
+                headers={"x-real-ip": "203.0.113.20"},
+            )
+
+    async def test_separate_budgets_when_trusting_vercel_headers(self, client, monkeypatch):
+        from security import client_address
+
+        monkeypatch.setattr(client_address, "_trust_vercel_headers", True)
+        assert (await self._exhaust_then_try_other(client)).status_code == 401
+
+    async def test_shared_budget_when_not_trusting_vercel_headers(self, client, monkeypatch):
+        from security import client_address
+
+        monkeypatch.setattr(client_address, "_trust_vercel_headers", False)
+        assert_429(await self._exhaust_then_try_other(client))
+
+
 class TestSignupRateLimit:
     async def test_signup_returns_429_after_limit(self, client):
         for i in range(5):

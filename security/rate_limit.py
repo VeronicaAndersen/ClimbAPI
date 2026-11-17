@@ -17,6 +17,12 @@ must run with ``--proxy-headers --forwarded-allow-ips=<proxy ip>`` so that
 value is the real client and not the proxy; the Dockerfile does this with the
 ``FORWARDED_ALLOW_IPS`` environment variable. X-Forwarded-For is deliberately
 not read here, because any client can set it.
+
+On Vercel there is no uvicorn in front to configure, and the connection
+address is the platform's. With TRUST_VERCEL_HEADERS the client key comes
+from the ``x-real-ip`` header that Vercel's edge sets (overwriting any value
+the client sent). The setting is only accepted when VERCEL=1, so it cannot
+be switched on by mistake where clients can set that header themselves.
 """
 
 import math
@@ -35,6 +41,7 @@ from limits.strategies import FixedWindowRateLimiter
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from security.client_address import client_ip
+from security.client_address import configure as configure_client_address
 
 TOO_MANY_REQUESTS_DETAIL = "Too many requests. Please try again later."
 
@@ -55,6 +62,7 @@ RATE_LIMITED_RESPONSE: dict[int | str, dict[str, object]] = {
 # Setting name -> environment variable.
 _ENV_VARS = {
     "ENABLED": "RATE_LIMIT_ENABLED",
+    "TRUST_VERCEL_HEADERS": "TRUST_VERCEL_HEADERS",
     "LOGIN": "RATE_LIMIT_LOGIN",
     "SIGNUP": "RATE_LIMIT_SIGNUP",
     "PASSWORD_RESET_REQUEST": "RATE_LIMIT_PASSWORD_RESET_REQUEST",
@@ -99,6 +107,9 @@ class RateLimitSettings(BaseModel):
     # Share of LOGIN_THROTTLE_MAX_TRACKED from which the per-client username
     # cap applies. 0 enforces it always, 1 only when a counter is full.
     LOGIN_THROTTLE_PRESSURE_RATIO: float = 0.1
+    # Take the client IP from Vercel's x-real-ip header instead of the
+    # connection address. Only allowed when running on Vercel (VERCEL=1).
+    TRUST_VERCEL_HEADERS: bool = False
 
     @field_validator(
         "LOGIN", "SIGNUP", "PASSWORD_RESET_REQUEST", "PASSWORD_RESET_CONFIRM", "REFRESH"
@@ -140,10 +151,19 @@ def load_rate_limit_settings() -> RateLimitSettings:
         for field, env_var in _ENV_VARS.items()
         if (value := os.getenv(env_var)) is not None
     }
-    return RateLimitSettings(**overrides)
+    settings = RateLimitSettings(**overrides)
+    if settings.TRUST_VERCEL_HEADERS and os.getenv("VERCEL") != "1":
+        # Anywhere else a client could send its own x-real-ip and pick its
+        # rate-limit and throttle key freely.
+        raise RuntimeError(
+            "TRUST_VERCEL_HEADERS is only allowed on Vercel (VERCEL=1). "
+            "Elsewhere, leave it unset and use uvicorn's FORWARDED_ALLOW_IPS."
+        )
+    return settings
 
 
 rate_limit_settings = load_rate_limit_settings()
+configure_client_address(trust_vercel_headers=rate_limit_settings.TRUST_VERCEL_HEADERS)
 
 _ROUTE_LIMIT_ATTR = "__route_rate_limit__"
 

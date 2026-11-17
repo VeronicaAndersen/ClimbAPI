@@ -119,3 +119,116 @@ def test_valid_addresses_do_not_warn(caplog, unknown_client_clock):
 )
 def test_ipv6_site_key(client_key, expected):
     assert ipv6_site_key(client_key) == expected
+
+
+
+# ---------------------------------------------------------------------------
+# Vercel: x-real-ip instead of the connection address (TRUST_VERCEL_HEADERS)
+# ---------------------------------------------------------------------------
+
+
+def _request(headers: list[tuple[str, str]], client=("10.9.8.7", 4321)):
+    from starlette.requests import Request
+
+    scope = {
+        "type": "http",
+        "headers": [(k.encode("latin-1"), v.encode("latin-1")) for k, v in headers],
+        "client": client,
+    }
+    return Request(scope)
+
+
+@pytest.fixture()
+def vercel_headers_on(monkeypatch):
+    monkeypatch.setattr(client_address, "_trust_vercel_headers", True)
+
+
+def test_header_ignored_when_setting_is_off():
+    request = _request([("x-real-ip", "203.0.113.50")])
+    assert client_ip(request) == "10.9.8.7"
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("203.0.113.50", "203.0.113.50"),
+        ("  203.0.113.50  ", "203.0.113.50"),
+        ("2001:db8:1:2::abcd", "2001:db8:1:2::/64"),
+        ("::ffff:203.0.113.50", "203.0.113.50"),
+        ("2002:cb00:7107::1", "203.0.113.7"),
+    ],
+)
+def test_header_used_when_setting_is_on(vercel_headers_on, header, expected):
+    request = _request([("x-real-ip", header)])
+    assert client_ip(request) == expected
+
+
+def test_connection_address_ignored_when_setting_is_on(vercel_headers_on):
+    request = _request([("x-real-ip", "203.0.113.50")], client=("198.51.100.1", 1))
+    assert client_ip(request) == "203.0.113.50"
+
+
+def test_site_key_applies_to_header_address(vercel_headers_on):
+    key = client_ip(_request([("x-real-ip", "2001:db8:aa:bb::1")]))
+    assert ipv6_site_key(key) == "2001:db8:aa::/48"
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [("x-real-ip", "203.0.113.50, 198.51.100.1")],  # a list
+        [("x-real-ip", "203.0.113.50:8080")],  # a port
+        [("x-real-ip", "[2001:db8::1]:443")],
+        [("x-real-ip", "not-an-ip")],
+        [("x-real-ip", "")],
+        [],  # missing
+        [("x-real-ip", "203.0.113.50"), ("x-real-ip", "198.51.100.1")],  # twice
+        [("x-forwarded-for", "203.0.113.50")],  # other headers are not read
+    ],
+)
+def test_bad_or_missing_header_gives_unknown_and_warns(
+    vercel_headers_on, unknown_client_clock, caplog, headers
+):
+    """Never the connection address: on Vercel that is the platform's."""
+    with caplog.at_level(logging.WARNING, logger="security.client_address"):
+        assert client_ip(_request(headers)) == "unknown"
+    assert len(caplog.records) == 1
+    assert "Client address missing or not an IP address" in caplog.records[0].getMessage()
+
+
+def test_configure_switches_the_source(monkeypatch):
+    monkeypatch.setattr(client_address, "_trust_vercel_headers", False)
+    request = _request([("x-real-ip", "203.0.113.50")])
+    client_address.configure(trust_vercel_headers=True)
+    assert client_ip(request) == "203.0.113.50"
+    client_address.configure(trust_vercel_headers=False)
+    assert client_ip(request) == "10.9.8.7"
+
+
+@pytest.mark.parametrize("vercel", [None, "0", "true", ""])
+def test_trusting_vercel_headers_off_vercel_fails_startup(monkeypatch, vercel):
+    from security.rate_limit import load_rate_limit_settings
+
+    monkeypatch.setenv("TRUST_VERCEL_HEADERS", "true")
+    if vercel is None:
+        monkeypatch.delenv("VERCEL", raising=False)
+    else:
+        monkeypatch.setenv("VERCEL", vercel)
+    with pytest.raises(RuntimeError, match="TRUST_VERCEL_HEADERS is only allowed on Vercel"):
+        load_rate_limit_settings()
+
+
+def test_trusting_vercel_headers_on_vercel_is_accepted(monkeypatch):
+    from security.rate_limit import load_rate_limit_settings
+
+    monkeypatch.setenv("TRUST_VERCEL_HEADERS", "true")
+    monkeypatch.setenv("VERCEL", "1")
+    assert load_rate_limit_settings().TRUST_VERCEL_HEADERS is True
+
+
+def test_trust_vercel_headers_defaults_off(monkeypatch):
+    from security.rate_limit import load_rate_limit_settings
+
+    monkeypatch.delenv("TRUST_VERCEL_HEADERS", raising=False)
+    monkeypatch.setenv("VERCEL", "1")
+    assert load_rate_limit_settings().TRUST_VERCEL_HEADERS is False
