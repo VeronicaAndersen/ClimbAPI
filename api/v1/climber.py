@@ -1,16 +1,23 @@
 from typing import Annotated, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.exceptions import RequestValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.config import get_session
 from db.models import Climber, Competition, Registration, UserScope
-from schema.climber import ClimberOut, ClimberCreate, ClimberUpdate, AdminClimberUpdate
+from schema.climber import (
+    AdminClimberUpdate,
+    ClimberCreate,
+    ClimberOut,
+    ClimberUpdate,
+    resolve_username_change,
+)
 from schema.registration import RegistrationWithCompetitionOut
 from security.deps import CurrentUser, AdminUser
-from security.hashing import hash_password
+from security.hashing import hash_password_async
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 
@@ -29,13 +36,44 @@ async def check_username_available(session: AsyncSession, username: str, exclude
 
 
 
+async def apply_username_change(
+    session: AsyncSession, updates: dict, current_username: str, climber_id: int
+) -> None:
+    """
+    Resolve a requested username in ``updates`` against the stored one.
+
+    Resending the unchanged (possibly legacy) username is dropped from the
+    update; a real change must follow the new-username rule (422) and be
+    free (409).
+    """
+    if "username" not in updates:
+        return
+    try:
+        new_username = resolve_username_change(updates["username"], current_username)
+    except ValueError as error:
+        raise RequestValidationError(
+            [{"loc": ("body", "username"), "msg": f"Value error, {error}", "type": "value_error"}]
+        ) from None
+    if new_username is None:
+        del updates["username"]
+        return
+    await check_username_available(session, new_username, exclude_id=climber_id)
+    updates["username"] = new_username
+
+
 @router.post("", response_model=ClimberOut, status_code=status.HTTP_201_CREATED)
-async def create_climber(payload: ClimberCreate, session: Session):
+async def create_climber(payload: ClimberCreate, admin: AdminUser, session: Session):
+    """
+    Create a climber. Admin only; self-service signup is POST /auth/signup.
+
+    The admin check runs as a dependency, before this body, so an anonymous
+    or non-admin caller never reaches the username check below and cannot
+    learn from a 409 whether a username exists.
+    """
     await check_username_available(session, payload.username)
-    await check_email_available(session, payload.email)
 
     climber_data = payload.model_dump(exclude={'password'})
-    climber = Climber(**climber_data, password=hash_password(payload.password))
+    climber = Climber(**climber_data, password=await hash_password_async(payload.password))
     session.add(climber)
 
     try:
@@ -61,14 +99,11 @@ async def update_me(payload: ClimberUpdate, current: CurrentUser, session: Sessi
     Users can update their own username and password.
     """
     updates = payload.model_dump(exclude_unset=True)
-
-    # Check username uniqueness if being changed
-    if 'username' in updates and updates['username'] != current.username:
-        await check_username_available(session, updates['username'], exclude_id=current.id)
+    await apply_username_change(session, updates, current.username, current.id)
 
     # Hash password if provided
     if 'password' in updates:
-        updates['password'] = hash_password(updates['password'])
+        updates['password'] = await hash_password_async(updates['password'])
 
     # Apply updates
     for field, value in updates.items():
@@ -104,14 +139,11 @@ async def update_climber(climber_id: int, payload: AdminClimberUpdate, admin: Ad
         raise HTTPException(status_code=404, detail="Climber not found")
 
     updates = payload.model_dump(exclude_unset=True)
-
-    # Check username uniqueness if being changed
-    if 'username' in updates and updates['username'] != climber.username:
-        await check_username_available(session, updates['username'], exclude_id=climber.id)
+    await apply_username_change(session, updates, climber.username, climber.id)
 
     # Hash password if provided
     if 'password' in updates:
-        updates['password'] = hash_password(updates['password'])
+        updates['password'] = await hash_password_async(updates['password'])
 
     # Validate user scope if provided
     if 'user_scope' in updates:

@@ -1,6 +1,17 @@
 """Unit tests for security/hashing.py"""
-import pytest
-from security.hashing import hash_password, verify_password, needs_rehash
+import asyncio
+import threading
+import time
+from unittest.mock import patch
+
+from security.hashing import (
+    hash_password,
+    hash_password_async,
+    needs_rehash,
+    verify_dummy_password_async,
+    verify_password,
+    verify_password_async,
+)
 
 
 def test_hash_password_returns_string():
@@ -41,3 +52,83 @@ def test_needs_rehash_fresh_hash():
     """A freshly created hash using current params should not need rehashing."""
     hashed = hash_password("testpassword")
     assert needs_rehash(hashed) is False
+
+
+# ---------------------------------------------------------------------------
+# Async wrappers
+# ---------------------------------------------------------------------------
+
+async def test_hash_password_async_produces_verifiable_hash():
+    hashed = await hash_password_async("asyncsecret")
+    assert verify_password("asyncsecret", hashed) is True
+
+
+async def test_verify_password_async_correct():
+    hashed = hash_password("correctpassword")
+    assert await verify_password_async("correctpassword", hashed) is True
+
+
+async def test_verify_password_async_wrong_password():
+    hashed = hash_password("correctpassword")
+    assert await verify_password_async("wrongpassword", hashed) is False
+
+
+async def test_verify_dummy_password_async_always_false():
+    assert await verify_dummy_password_async("anything") is False
+    assert await verify_dummy_password_async("") is False
+
+
+async def test_hash_password_async_runs_off_event_loop_thread():
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+
+    def fake_hash(plain_password: str) -> str:
+        seen.append(threading.get_ident())
+        return "hashed"
+
+    with patch("security.hashing.hash_password", side_effect=fake_hash):
+        assert await hash_password_async("pw") == "hashed"
+
+    assert seen and seen[0] != loop_thread
+
+
+async def test_verify_password_async_does_not_block_event_loop():
+    """While a slow verification runs, other coroutines keep making progress."""
+    def slow_verify(plain_password: str, password_hash: str) -> bool:
+        time.sleep(0.2)
+        return True
+
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    task = asyncio.create_task(ticker())
+    try:
+        with patch("security.hashing.verify_password", side_effect=slow_verify):
+            assert await verify_password_async("pw", "hash") is True
+    finally:
+        task.cancel()
+
+    assert ticks >= 5
+
+
+async def test_prepare_dummy_hash_computes_it_eagerly():
+    from security.hashing import _dummy_hash, prepare_dummy_hash
+
+    _dummy_hash.cache_clear()
+    await prepare_dummy_hash()
+    assert _dummy_hash.cache_info().currsize == 1
+
+
+async def test_app_startup_prepares_dummy_hash():
+    """Regression: the first unknown-user login must not pay for the hash."""
+    from main import app
+    from security.hashing import _dummy_hash
+
+    _dummy_hash.cache_clear()
+    async with app.router.lifespan_context(app):
+        assert _dummy_hash.cache_info().currsize == 1
