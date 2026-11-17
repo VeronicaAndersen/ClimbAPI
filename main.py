@@ -35,7 +35,7 @@ app = FastAPI(title="Grepp API (FastAPI Edition)",
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://grepp.vercel.app", "http://localhost:5173"],
+    allow_origins=["https://grepp.vercel.app", "http://localhost:5173", "https://climb-api-git-dev-veronica-andersens-projects.vercel.app"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     allow_headers=["*"],
