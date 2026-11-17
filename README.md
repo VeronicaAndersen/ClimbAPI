@@ -90,6 +90,9 @@ The auth endpoints are rate limited per client IP, and failed logins are also li
 | `LOGIN_MAX_USERNAMES_PER_CLIENT` | `20` | Distinct usernames one client may have recent failures on; past this it gets `429` for new usernames. Only enforced while the throttle is under pressure |
 | `LOGIN_THROTTLE_MAX_TRACKED` | `200000` | Entries kept per throttle counter. A failed login costs about 550-750 bytes from IPv4 and up to about 1 KB from IPv6 (short to 200-character usernames; a key is never longer than 200 characters, even when NFKC expands the typed name), so at most about 210 MB when full |
 | `LOGIN_THROTTLE_PRESSURE_RATIO` | `0.1` | The throttle counts as under pressure once a counter holds this share of `LOGIN_THROTTLE_MAX_TRACKED` (20,000 keys by default). `0` enforces the per-client cap always, `1` only when full |
+| `LOGIN_THROTTLE_BACKEND` | `memory` | Where the login throttle keeps its counters. Only `memory` (this process) is implemented; `postgres` and `shadow` are planned and currently stop the app at startup |
+| `LOGIN_THROTTLE_DB_TIMEOUT_SECONDS` | `3` | Planned Postgres backend: upper bound for each throttle query (must be positive) |
+| `LOGIN_THROTTLE_LOAD_CACHE_SECONDS` | `5` | Planned Postgres backend: how long a load reading may be reused (must be positive) |
 | `LOGIN_FAILURE_WINDOW_SECONDS` | `900` | Sliding window for all failure limits |
 
 Limit strings use the [limits](https://limits.readthedocs.io/en/stable/quickstart.html#rate-limit-string-notation) notation, for example `10/minute` or `20/minute;100/hour`. Invalid values stop the app at startup.

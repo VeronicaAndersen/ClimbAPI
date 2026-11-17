@@ -65,3 +65,48 @@ def test_pressure_ratio_outside_zero_to_one_rejected(monkeypatch, value):
 def test_pressure_ratio_bounds_accepted(monkeypatch, value):
     monkeypatch.setenv("LOGIN_THROTTLE_PRESSURE_RATIO", value)
     assert load_rate_limit_settings().LOGIN_THROTTLE_PRESSURE_RATIO == float(value)
+
+
+
+def test_login_throttle_backend_defaults(monkeypatch):
+    for name in (
+        "LOGIN_THROTTLE_BACKEND",
+        "LOGIN_THROTTLE_DB_TIMEOUT_SECONDS",
+        "LOGIN_THROTTLE_LOAD_CACHE_SECONDS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    settings = load_rate_limit_settings()
+    assert settings.LOGIN_THROTTLE_BACKEND == "memory"
+    assert settings.LOGIN_THROTTLE_DB_TIMEOUT_SECONDS == 3.0
+    assert settings.LOGIN_THROTTLE_LOAD_CACHE_SECONDS == 5.0
+
+
+@pytest.mark.parametrize("backend", ["memory", "postgres", "shadow"])
+def test_login_throttle_backend_known_values(monkeypatch, backend):
+    monkeypatch.setenv("LOGIN_THROTTLE_BACKEND", backend)
+    assert load_rate_limit_settings().LOGIN_THROTTLE_BACKEND == backend
+
+
+@pytest.mark.parametrize("backend", ["redis", "Memory", ""])
+def test_login_throttle_backend_unknown_value_rejected(monkeypatch, backend):
+    monkeypatch.setenv("LOGIN_THROTTLE_BACKEND", backend)
+    with pytest.raises(ValidationError):
+        load_rate_limit_settings()
+
+
+@pytest.mark.parametrize(
+    "name", ["LOGIN_THROTTLE_DB_TIMEOUT_SECONDS", "LOGIN_THROTTLE_LOAD_CACHE_SECONDS"]
+)
+@pytest.mark.parametrize("value", ["0", "-1", "soon", "nan"])
+def test_login_throttle_seconds_must_be_positive(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError):
+        load_rate_limit_settings()
+
+
+@pytest.mark.parametrize(
+    "name", ["LOGIN_THROTTLE_DB_TIMEOUT_SECONDS", "LOGIN_THROTTLE_LOAD_CACHE_SECONDS"]
+)
+def test_login_throttle_seconds_accept_fractions(monkeypatch, name):
+    monkeypatch.setenv(name, "0.5")
+    assert getattr(load_rate_limit_settings(), name) == 0.5

@@ -30,13 +30,13 @@ def throttle_on(monkeypatch):
 
 async def test_server_error_does_not_count_as_failed_login():
     """Regression: DB errors used to leave the reservation as a failure."""
-    for _ in range(login_throttle.max_failures + 2):
+    for _ in range(login_throttle.throttle.max_failures + 2):
         with pytest.raises(RuntimeError):
             await authenticate_user(
                 FailingSession(RuntimeError("db down")), "alice", "pw", IP
             )
-    assert not isinstance(login_throttle.acquire("alice", IP), int)
-    assert len(login_throttle._by_username) == 0
+    assert not isinstance(await login_throttle.acquire("alice", IP), int)
+    assert len(login_throttle.throttle._by_username) == 0
 
 
 async def test_cancelled_attempt_stays_counted():
@@ -44,4 +44,4 @@ async def test_cancelled_attempt_stays_counted():
         await authenticate_user(
             FailingSession(asyncio.CancelledError()), "alice", "pw", IP
         )
-    assert len(login_throttle._by_client.recent(("alice", IP))) == 1
+    assert len(login_throttle.throttle._by_client.recent(("alice", IP))) == 1

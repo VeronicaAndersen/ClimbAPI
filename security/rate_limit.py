@@ -30,7 +30,7 @@ import os
 import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
@@ -63,6 +63,9 @@ RATE_LIMITED_RESPONSE: dict[int | str, dict[str, object]] = {
 _ENV_VARS = {
     "ENABLED": "RATE_LIMIT_ENABLED",
     "TRUST_VERCEL_HEADERS": "TRUST_VERCEL_HEADERS",
+    "LOGIN_THROTTLE_BACKEND": "LOGIN_THROTTLE_BACKEND",
+    "LOGIN_THROTTLE_DB_TIMEOUT_SECONDS": "LOGIN_THROTTLE_DB_TIMEOUT_SECONDS",
+    "LOGIN_THROTTLE_LOAD_CACHE_SECONDS": "LOGIN_THROTTLE_LOAD_CACHE_SECONDS",
     "LOGIN": "RATE_LIMIT_LOGIN",
     "SIGNUP": "RATE_LIMIT_SIGNUP",
     "PASSWORD_RESET_REQUEST": "RATE_LIMIT_PASSWORD_RESET_REQUEST",
@@ -110,6 +113,14 @@ class RateLimitSettings(BaseModel):
     # Take the client IP from Vercel's x-real-ip header instead of the
     # connection address. Only allowed when running on Vercel (VERCEL=1).
     TRUST_VERCEL_HEADERS: bool = False
+    # Where the login throttle keeps its counters. Only "memory" (this
+    # process) exists so far; "postgres" (shared) and "shadow" (memory
+    # decides, Postgres runs alongside for comparison) are planned.
+    LOGIN_THROTTLE_BACKEND: Literal["memory", "postgres", "shadow"] = "memory"
+    # For the Postgres backend: upper bound for each throttle query.
+    LOGIN_THROTTLE_DB_TIMEOUT_SECONDS: float = 3.0
+    # For the Postgres backend: how long a load reading may be reused.
+    LOGIN_THROTTLE_LOAD_CACHE_SECONDS: float = 5.0
 
     @field_validator(
         "LOGIN", "SIGNUP", "PASSWORD_RESET_REQUEST", "PASSWORD_RESET_CONFIRM", "REFRESH"
@@ -120,6 +131,13 @@ class RateLimitSettings(BaseModel):
             parse_many(value)
         except ValueError as e:
             raise ValueError(f"Invalid rate limit string: {value!r}") from e
+        return value
+
+    @field_validator("LOGIN_THROTTLE_DB_TIMEOUT_SECONDS", "LOGIN_THROTTLE_LOAD_CACHE_SECONDS")
+    @classmethod
+    def must_be_positive_seconds(cls, value: float) -> float:
+        if not value > 0:
+            raise ValueError("must be a positive number of seconds")
         return value
 
     @field_validator("LOGIN_THROTTLE_PRESSURE_RATIO")

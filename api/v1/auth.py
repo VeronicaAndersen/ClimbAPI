@@ -138,7 +138,7 @@ async def authenticate_user(
     throttle_key = strict if len(strict) <= USERNAME_MAX_LENGTH else username
     # Reserved up front so concurrent guesses cannot all pass the check; it
     # stays recorded as a failure for this client unless the login succeeds.
-    reservation = login_throttle.acquire(throttle_key, client_address)
+    reservation = await login_throttle.acquire(throttle_key, client_address)
     if isinstance(reservation, int):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -153,13 +153,13 @@ async def authenticate_user(
         # request's reservation. asyncio.CancelledError is a BaseException and
         # deliberately not caught: a cancelled attempt stays counted, which
         # errs on the safe side.
-        login_throttle.release(reservation)
+        await login_throttle.release(reservation)
         raise
     if user is None:
-        login_throttle.failed(reservation)
+        await login_throttle.failed(reservation)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    login_throttle.succeeded(reservation)
+    await login_throttle.succeeded(reservation)
 
     # Opportunistic rehash if password parameters changed
     if needs_rehash(user.password):

@@ -353,8 +353,8 @@ class TestCredentialLengthLimits:
         )
         assert resp.status_code == 401
         assert resp.json() == {"detail": "Invalid credentials"}
-        assert len(login_throttle._by_client) == 0
-        assert len(login_throttle._by_username) == 0
+        assert len(login_throttle.throttle._by_client) == 0
+        assert len(login_throttle.throttle._by_username) == 0
 
     @pytest.mark.parametrize("path", ["/auth/login", "/auth/token"])
     async def test_username_too_long_after_lowercasing_is_rejected_without_throttling(
@@ -371,7 +371,7 @@ class TestCredentialLengthLimits:
             resp = await client.post(f"{BASE}{path}", json=credentials)
         assert resp.status_code == 401
         assert resp.json() == {"detail": "Invalid credentials"}
-        assert len(login_throttle._by_client) == 0
+        assert len(login_throttle.throttle._by_client) == 0
 
     async def test_signup_rejects_whitespace_only_username(self, client):
         resp = await signup(client, username="   ")
@@ -390,7 +390,7 @@ class TestCredentialLengthLimits:
             resp = await client.post(f"{BASE}{path}", json=credentials)
         assert resp.status_code == 401
         assert resp.json() == {"detail": "Invalid credentials"}
-        assert len(login_throttle._by_client) == 0
+        assert len(login_throttle.throttle._by_client) == 0
 
     async def test_signup_rejects_username_with_nul(self, client):
         resp = await signup(client, username="ali\x00ce")
@@ -414,7 +414,7 @@ class TestCredentialLengthLimits:
             resp = await client.post(f"{BASE}{path}", json=credentials)
         assert resp.status_code == 401
         assert resp.json() == {"detail": "Invalid credentials"}
-        assert len(login_throttle._by_client) == 0
+        assert len(login_throttle.throttle._by_client) == 0
 
     async def test_signup_rejects_username_too_long_after_lowercasing(self, client):
         resp = await signup(client, username="İ" * 200)
