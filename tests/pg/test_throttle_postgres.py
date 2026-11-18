@@ -358,3 +358,33 @@ async def test_ip_limit_checks_every_limit_before_counting(pg_engine):
             )
         ).scalar_one()
     assert hourly == 2  # the refused request was not counted in the hourly limit
+
+
+
+# ---------------------------------------------------------------------------
+# Function hardening
+# ---------------------------------------------------------------------------
+
+
+async def test_plpgsql_functions_pin_search_path_and_sql_helpers_stay_inlinable(pg_engine):
+    async with pg_engine.connect() as connection:
+        rows = (
+            await connection.execute(
+                text(
+                    "SELECT p.proname, l.lanname, p.proconfig FROM pg_proc p "
+                    "JOIN pg_language l ON l.oid = p.prolang "
+                    "WHERE p.proname LIKE 'login\\_%' ORDER BY p.proname"
+                )
+            )
+        ).all()
+    plpgsql = {row.proname: row.proconfig for row in rows if row.lanname == "plpgsql"}
+    sql = {row.proname: row.proconfig for row in rows if row.lanname == "sql"}
+    assert set(plpgsql) == {
+        "login_ip_limit_hit",
+        "login_throttle_acquire",
+        "login_throttle_finish",
+        "login_throttle_withdraw",
+    }
+    assert all(config == ["search_path=pg_catalog, public"] for config in plpgsql.values())
+    # A SET clause would stop the planner from inlining these small helpers.
+    assert sql and all(config is None for config in sql.values())

@@ -41,6 +41,7 @@ CREATE TYPE public.user_scope_t AS ENUM (
 
 CREATE FUNCTION public.login_ip_limit_hit(p_client text, p_amounts integer[], p_periods integer[], p_lock_timeout_ms integer, p_now timestamp with time zone DEFAULT NULL::timestamp with time zone, OUT retry_after integer) RETURNS integer
     LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public'
     AS $$
 DECLARE
     v_now timestamptz;
@@ -97,6 +98,7 @@ $$;
 
 CREATE FUNCTION public.login_throttle_acquire(p_username text, p_client text, p_site text, p_window interval, p_max_failures integer, p_max_per_username integer, p_max_per_prefix integer, p_max_usernames_per_client integer, p_under_pressure boolean, p_full_kinds smallint[], p_lock_timeout_ms integer, p_now timestamp with time zone DEFAULT NULL::timestamp with time zone, OUT reserved_at timestamp with time zone, OUT retry_after integer, OUT blocked_by_capacity boolean, OUT blocked_by_client_cap boolean) RETURNS record
     LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public'
     AS $$
 DECLARE
     v_now timestamptz;
@@ -254,6 +256,7 @@ $$;
 
 CREATE FUNCTION public.login_throttle_finish(p_outcome smallint, p_username text, p_client text, p_site text, p_at timestamp with time zone, p_window interval, p_max_per_username integer, p_full_kinds smallint[], p_lock_timeout_ms integer, p_now timestamp with time zone DEFAULT NULL::timestamp with time zone) RETURNS void
     LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public'
     AS $$
 DECLARE
     v_now timestamptz := coalesce(p_now, clock_timestamp());
@@ -369,6 +372,7 @@ $$;
 
 CREATE FUNCTION public.login_throttle_withdraw(p_kind smallint, p_username text, p_scope text, p_at timestamp with time zone) RETURNS void
     LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public'
     AS $$
 BEGIN
     UPDATE public.login_throttle_key AS k

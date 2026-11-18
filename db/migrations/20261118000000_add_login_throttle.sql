@@ -109,7 +109,10 @@ CREATE FUNCTION public.login_throttle_acquire(
     OUT blocked_by_capacity boolean,
     OUT blocked_by_client_cap boolean
 )
-LANGUAGE plpgsql VOLATILE AS $$
+LANGUAGE plpgsql VOLATILE
+-- Fixed search path: a caller's search_path can never redirect a name here.
+SET search_path = pg_catalog, public
+AS $$
 DECLARE
     v_now timestamptz;
     v_cutoff timestamptz;
@@ -281,7 +284,10 @@ CREATE FUNCTION public.login_throttle_finish(
     p_now timestamptz DEFAULT NULL
 )
 RETURNS void
-LANGUAGE plpgsql VOLATILE AS $$
+LANGUAGE plpgsql VOLATILE
+-- Fixed search path: a caller's search_path can never redirect a name here.
+SET search_path = pg_catalog, public
+AS $$
 DECLARE
     v_now timestamptz := coalesce(p_now, clock_timestamp());
     v_cutoff timestamptz := v_now - p_window;
@@ -337,7 +343,10 @@ CREATE FUNCTION public.login_throttle_withdraw(
     p_kind smallint, p_username text, p_scope text, p_at timestamptz
 )
 RETURNS void
-LANGUAGE plpgsql VOLATILE AS $$
+LANGUAGE plpgsql VOLATILE
+-- Fixed search path: a caller's search_path can never redirect a name here.
+SET search_path = pg_catalog, public
+AS $$
 BEGIN
     UPDATE public.login_throttle_key AS k
     SET stamps = array_remove(k.stamps, p_at),
@@ -375,7 +384,10 @@ CREATE FUNCTION public.login_ip_limit_hit(
     p_now timestamptz DEFAULT NULL,
     OUT retry_after integer
 )
-LANGUAGE plpgsql VOLATILE AS $$
+LANGUAGE plpgsql VOLATILE
+-- Fixed search path: a caller's search_path can never redirect a name here.
+SET search_path = pg_catalog, public
+AS $$
 DECLARE
     v_now timestamptz;
     v_hits integer;
