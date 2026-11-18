@@ -58,6 +58,10 @@ TEST_POSTGRES_URL='postgresql+asyncpg://<user>@localhost/climbapi_throttle_test'
 
 Mail settings are optional for local startup. Without configured mail credentials no reset email is sent: the API logs a warning (at most once a minute) and still answers the request normally. The reset link is never printed or logged, because it contains a live token. To try the reset flow locally, point the `MAIL_*` settings at a local SMTP catcher such as [Mailpit](https://mailpit.axllent.org/).
 
+## CI
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `Dev` and `main`, with a read-only token and no secrets. It sets up Python from `.python-version`, installs `requirements-dev.txt`, starts a throwaway `postgres:17` service container, applies the migrations with a pinned dbmate release (its SHA-256 is checked), and runs the whole test suite with `TEST_POSTGRES_URL`, so the Postgres throttle tests in `tests/pg` run too. Ruff only checks the files changed on the Postgres throttle branch, because the repository still has older findings; widen the list as those are fixed. Actions are pinned to commit SHAs, and a new push cancels the previous run for the same branch.
+
 ## Usernames
 
 There are two rules on purpose: a strict one for new usernames and a lenient one for finding existing accounts. Accounts created before the strict rule contain spaces, "@", accented letters and even emoji, and they must keep working.
