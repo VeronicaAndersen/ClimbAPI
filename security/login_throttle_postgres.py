@@ -30,7 +30,9 @@ Failure modes (owner decision: 429 with Retry-After, never 503):
   FAIL_CLOSED_RETRY_AFTER_SECONDS. One retry when the connection was
   invalidated (a retry after the first call committed reserves twice, the
   safe side).
-* the load query fails: pressure is assumed on and capacity not full.
+* the load query fails or takes longer than a third of the timeout:
+  pressure is assumed on and capacity not full, cached like a normal
+  reading, so the following logins do not wait for it again.
 * finish fails: logged and ignored. The reservation already counts as a
   failure for the client and the /48, so the result errs on the safe side;
   only the approximate per-username count can miss a failure. After a
@@ -122,6 +124,9 @@ class PostgresLoginThrottle:
         self.pressure_threshold = math.ceil(pressure_ratio * max_tracked)
         self._window = timedelta(seconds=window_seconds)
         self._db_timeout = db_timeout_seconds
+        # The load reading is optional (a failure means pressure on), so it
+        # gets a shorter limit and cannot use up a login's whole time budget.
+        self._load_timeout = db_timeout_seconds / 3
         self._lock_timeout_ms = lock_timeout_ms(db_timeout_seconds)
         self._load_cache_seconds = load_cache_seconds
         # The database clock is used unless a test injects one (p_now).
@@ -158,10 +163,11 @@ class PostgresLoginThrottle:
         username = normalize_username(username)
         if not self.enabled:
             return Reservation(username, client_ip, None)
+        # Never raises for database trouble: a failed or slow load means
+        # pressure on and capacity not full (owner decision).
+        load = await self._current_load()
         try:
-            async with asyncio.timeout(self._db_timeout):
-                load = await self._current_load()
-                row = await self._call_acquire(username, client_ip, load)
+            row = await self._call_acquire(username, client_ip, load)
         except _DATABASE_ERRORS as error:
             logger.debug("Login throttle acquire failed (%s)", type(error).__name__)
             self._warn_unavailable()
@@ -196,19 +202,53 @@ class PostgresLoginThrottle:
         if self._monotonic() - self._load_at < self._load_cache_seconds:
             return self._load
         try:
-            async with self._engine.connect() as connection:
-                result = await connection.execute(
-                    _LOAD,
-                    {"now": self._now(), "window": self._window, "limit": self.max_tracked},
-                )
-                load: dict[int, int] | None = {int(k): int(n) for k, n in result.all()}
-        except (SQLAlchemyError, OSError) as error:
+            rows = await self._execute(
+                _LOAD,
+                {"now": self._now(), "window": self._window, "limit": self.max_tracked},
+                timeout=self._load_timeout,
+            )
+            load: dict[int, int] | None = {int(k): int(n) for k, n in rows}
+        except _DATABASE_ERRORS as error:
+            # A timeout too: cached like any failure, so the following logins
+            # do not each wait for the slow query again.
             logger.debug("Login throttle load query failed (%s)", type(error).__name__)
             self._warn_load_failed()
             load = None
         self._load = load
         self._load_at = self._monotonic()
         return load
+
+    async def _execute(
+        self,
+        statement,
+        params: dict,
+        *,
+        timeout: float | None = None,
+        deadline: float | None = None,
+    ) -> list:
+        """
+        Run one statement on its own autocommit connection, within a time limit.
+
+        If the limit (or a cancellation of the request) interrupts the query,
+        the connection is invalidated before it is released: the driver may
+        be left mid-protocol, and such a connection must never go back into
+        the pool for the next login.
+        """
+        if deadline is None:
+            deadline = asyncio.get_running_loop().time() + (timeout or self._db_timeout)
+        connection = None
+        try:
+            async with asyncio.timeout_at(deadline):
+                connection = await self._engine.connect()
+                result = await connection.execute(statement, params)
+                return list(result.all())
+        except (TimeoutError, asyncio.CancelledError):
+            if connection is not None:
+                await connection.invalidate()
+            raise
+        finally:
+            if connection is not None:
+                await connection.close()
 
     def _under_pressure(self, load: dict[int, int] | None) -> bool:
         if load is None:
@@ -235,11 +275,11 @@ class PostgresLoginThrottle:
             "lock_timeout_ms": self._lock_timeout_ms,
             "now": self._now(),
         }
+        deadline = asyncio.get_running_loop().time() + self._db_timeout
         for attempt in (1, 2):
             try:
-                async with self._engine.connect() as connection:
-                    result = await connection.execute(_ACQUIRE, params)
-                    return result.one()
+                rows = await self._execute(_ACQUIRE, params, deadline=deadline)
+                return rows[0]
             except DBAPIError as error:
                 # A stale pooled connection: retry once on a fresh one.
                 if attempt == 1 and error.connection_invalidated:
@@ -265,9 +305,7 @@ class PostgresLoginThrottle:
             "now": self._now(),
         }
         try:
-            async with asyncio.timeout(self._db_timeout):
-                async with self._engine.connect() as connection:
-                    await connection.execute(_FINISH, params)
+            await self._execute(_FINISH, params, timeout=self._db_timeout)
         except _DATABASE_ERRORS as error:
             logger.debug("Login throttle finish failed (%s)", type(error).__name__)
             self._warn_finish_failed()

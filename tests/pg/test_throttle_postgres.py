@@ -111,6 +111,58 @@ async def test_held_advisory_lock_times_out_and_fails_closed(pg_engine):
     assert isinstance(await backend.acquire("alice", IP), Reservation)
 
 
+async def test_slow_load_means_pressure_on_without_429_and_is_cached(pg_engine, monkeypatch):
+    """
+    Regression: the load shared acquire's time limit, so a slow load refused
+    the login with 429, and was not cached, so every login did it again.
+    """
+    from security import login_throttle_postgres as module
+
+    # Test hook: a load reading that takes 2 s (all parameters still bound).
+    monkeypatch.setattr(
+        module,
+        "_LOAD",
+        text(
+            "SELECT 1::smallint AS key_kind, 0 AS active_keys FROM pg_sleep(2) "
+            "WHERE coalesce(CAST(:now AS timestamptz), now()) IS NOT NULL "
+            "AND CAST(:window AS interval) IS NOT NULL AND CAST(:limit AS integer) > 0"
+        ),
+    )
+    # With these limits a real reading would NOT be pressure, so the
+    # per-client cap applying below shows the throttle assumed pressure.
+    backend = throttle(
+        pg_engine,
+        db_timeout_seconds=1.5,
+        load_cache_seconds=60,
+        max_usernames_per_client=1,
+        pressure_ratio=1.0,
+    )
+    sleeps: list[str] = []
+
+    def record(_conn, _cursor, statement, *_args):
+        if "pg_sleep" in statement:
+            sleeps.append(statement)
+
+    event.listen(pg_engine.sync_engine, "before_cursor_execute", record)
+    try:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        first = await backend.acquire("alice", IP)
+        elapsed = loop.time() - started
+        assert isinstance(first, Reservation)  # not the fail-closed 429
+        assert elapsed < 1.0  # gave up on the load after 0.5 s
+        await backend.failed(first)
+        assert backend._load is None
+        # Pressure on: a second username from the same client is capped.
+        assert await backend.acquire("bob", IP) == 60
+        assert await backend.acquire("carol", IP) == 60
+    finally:
+        event.remove(pg_engine.sync_engine, "before_cursor_execute", record)
+    assert len(sleeps) == 1  # cached for the TTL, not re-run per login
+    # The connection cut off by the timeout was not reused: queries still work.
+    assert len(await stored_rows(pg_engine, kind=1)) == 1
+
+
 # ---------------------------------------------------------------------------
 # Query counts do not reveal whether a username exists
 # ---------------------------------------------------------------------------
