@@ -94,6 +94,51 @@ async def test_concurrent_release_and_acquire_leave_consistent_counts(pg_engine)
     assert row.last_at == max(row.stamps)
 
 
+async def test_release_waits_for_the_reservation_lock(pg_engine):
+    """
+    Regression: withdrawing took no lock, so a reservation could land
+    between its UPDATE and DELETE and the withdrawn stamp stayed counted.
+    """
+    backend = throttle(pg_engine, db_timeout_seconds=2.0)
+    held = await backend.acquire("alice", IP)
+    loop = asyncio.get_running_loop()
+    async with pg_engine.connect() as holder:
+        transaction = await holder.begin()
+        await holder.execute(
+            text("SELECT pg_advisory_xact_lock(1, hashtext(:key))"), {"key": f"alice|{IP}"}
+        )
+        release = asyncio.create_task(backend.release(held))
+        await asyncio.sleep(0.3)
+        assert not release.done()  # waits for the key's lock like acquire does
+        await transaction.rollback()
+    started = loop.time()
+    await release
+    assert loop.time() - started < 0.5
+    assert await stored_rows(pg_engine, kind=1) == []
+
+
+async def test_concurrent_acquire_and_withdraw_leave_exact_stamps(pg_engine):
+    backend = throttle(pg_engine, max_failures=1000, max_failures_per_prefix=1000)
+    client = "2001:db8:dd:1::/64"
+    kept: list[Reservation] = []
+    for _ in range(10):
+        first = await backend.acquire("alice", client)
+        second = await backend.acquire("alice", client)
+        results = await asyncio.gather(
+            backend.release(first),
+            backend.acquire("alice", client),
+            backend.release(second),
+            backend.acquire("alice", client),
+        )
+        kept.extend(reservations(results))
+    expected = {r.at for r in kept}
+    (client_row,) = await stored_rows(pg_engine, kind=1)
+    (site_row,) = await stored_rows(pg_engine, kind=3)
+    assert set(client_row.stamps) == expected and len(client_row.stamps) == len(expected)
+    assert set(site_row.stamps) == expected and len(site_row.stamps) == len(expected)
+    assert client_row.last_at == max(client_row.stamps)
+
+
 async def test_held_advisory_lock_times_out_and_fails_closed(pg_engine):
     backend = throttle(pg_engine, db_timeout_seconds=1.0)
     async with pg_engine.connect() as holder:

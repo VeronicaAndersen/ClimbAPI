@@ -249,10 +249,10 @@ $$;
 
 
 --
--- Name: login_throttle_finish(smallint, text, text, text, timestamp with time zone, interval, integer, smallint[], timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
+-- Name: login_throttle_finish(smallint, text, text, text, timestamp with time zone, interval, integer, smallint[], integer, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.login_throttle_finish(p_outcome smallint, p_username text, p_client text, p_site text, p_at timestamp with time zone, p_window interval, p_max_per_username integer, p_full_kinds smallint[], p_now timestamp with time zone DEFAULT NULL::timestamp with time zone) RETURNS void
+CREATE FUNCTION public.login_throttle_finish(p_outcome smallint, p_username text, p_client text, p_site text, p_at timestamp with time zone, p_window interval, p_max_per_username integer, p_full_kinds smallint[], p_lock_timeout_ms integer, p_now timestamp with time zone DEFAULT NULL::timestamp with time zone) RETURNS void
     LANGUAGE plpgsql
     AS $$
 DECLARE
@@ -283,6 +283,9 @@ BEGIN
         RETURN;
     END IF;
 
+    PERFORM set_config('lock_timeout', p_lock_timeout_ms::text || 'ms', true);
+    PERFORM pg_advisory_xact_lock(1, hashtext(p_username || '|' || coalesce(p_site, p_client)));
+    PERFORM pg_advisory_xact_lock(2, hashtext(p_client));
     IF p_outcome = 2 THEN
         -- Proving the password resets this client's failures for the name.
         DELETE FROM public.login_throttle_key AS k

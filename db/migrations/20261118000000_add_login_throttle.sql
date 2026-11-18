@@ -261,9 +261,13 @@ $$;
 
 
 -- Record the outcome of a reserved attempt: 1 failed, 2 succeeded,
--- 3 released (server error). Takes no advisory lock; a concurrent acquire can
--- only see counts that are too high, or miss a username failure (the
--- per-username cap is approximate under a burst, as in the memory backend).
+-- 3 released (server error).
+-- * 2 and 3 change the (username, client) and (username, /48) keys, so they
+--   take the same locks as login_throttle_acquire, in the same order: a
+--   withdrawal can never interleave with a concurrent reservation.
+-- * 1 only appends to the username key and takes no lock; a concurrent
+--   acquire may miss that failure (the per-username cap is approximate under
+--   a burst, as in the memory backend).
 CREATE FUNCTION public.login_throttle_finish(
     p_outcome smallint,
     p_username text,
@@ -273,6 +277,7 @@ CREATE FUNCTION public.login_throttle_finish(
     p_window interval,
     p_max_per_username integer,
     p_full_kinds smallint[],
+    p_lock_timeout_ms integer,
     p_now timestamptz DEFAULT NULL
 )
 RETURNS void
@@ -305,6 +310,9 @@ BEGIN
         RETURN;
     END IF;
 
+    PERFORM set_config('lock_timeout', p_lock_timeout_ms::text || 'ms', true);
+    PERFORM pg_advisory_xact_lock(1, hashtext(p_username || '|' || coalesce(p_site, p_client)));
+    PERFORM pg_advisory_xact_lock(2, hashtext(p_client));
     IF p_outcome = 2 THEN
         -- Proving the password resets this client's failures for the name.
         DELETE FROM public.login_throttle_key AS k
@@ -322,8 +330,9 @@ $$;
 
 -- Remove exactly the stamp p_at from one key; delete the key if it was the
 -- only one. The UPDATE goes first and only touches keys with other stamps,
--- so it never leaves an empty array; both statements re-check their
--- condition on the newest row version.
+-- so it never leaves an empty array. Callers hold the key's advisory lock
+-- (see login_throttle_finish), so no reservation can be added between the
+-- two statements.
 CREATE FUNCTION public.login_throttle_withdraw(
     p_kind smallint, p_username text, p_scope text, p_at timestamptz
 )
@@ -420,7 +429,7 @@ $$;
 
 DROP FUNCTION IF EXISTS public.login_ip_limit_hit(text, integer[], integer[], integer, timestamptz);
 DROP FUNCTION IF EXISTS public.login_throttle_load(timestamptz, integer);
-DROP FUNCTION IF EXISTS public.login_throttle_finish(smallint, text, text, text, timestamptz, interval, integer, smallint[], timestamptz);
+DROP FUNCTION IF EXISTS public.login_throttle_finish(smallint, text, text, text, timestamptz, interval, integer, smallint[], integer, timestamptz);
 DROP FUNCTION IF EXISTS public.login_throttle_withdraw(smallint, text, text, timestamptz);
 DROP FUNCTION IF EXISTS public.login_throttle_acquire(text, text, text, interval, integer, integer, integer, integer, boolean, smallint[], integer, timestamptz);
 DROP FUNCTION IF EXISTS public.login_throttle_wait(timestamptz, interval, timestamptz);

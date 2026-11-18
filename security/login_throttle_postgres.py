@@ -82,7 +82,7 @@ _FINISH = text(
     "CAST(:outcome AS smallint), CAST(:username AS text), CAST(:client AS text), "
     "CAST(:site AS text), CAST(:at AS timestamptz), CAST(:window AS interval), "
     "CAST(:max_per_username AS integer), CAST(:full_kinds AS smallint[]), "
-    "CAST(:now AS timestamptz))"
+    "CAST(:lock_timeout_ms AS integer), CAST(:now AS timestamptz))"
 )
 _LOAD = text(
     "SELECT key_kind, active_keys FROM public.login_throttle_load("
@@ -302,6 +302,7 @@ class PostgresLoginThrottle:
             "max_per_username": self.max_failures_per_username,
             # Cached only: recording an outcome must not add a load query.
             "full_kinds": self._full_kinds(self._load),
+            "lock_timeout_ms": self._lock_timeout_ms,
             "now": self._now(),
         }
         try:
