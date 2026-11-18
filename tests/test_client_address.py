@@ -205,24 +205,42 @@ def test_configure_switches_the_source(monkeypatch):
     assert client_ip(request) == "10.9.8.7"
 
 
-@pytest.mark.parametrize("vercel", [None, "0", "true", ""])
-def test_trusting_vercel_headers_off_vercel_fails_startup(monkeypatch, vercel):
+@pytest.mark.parametrize(
+    ("vercel", "vercel_env"),
+    [
+        (None, None),
+        ("0", "production"),
+        ("true", "production"),
+        ("", "preview"),
+        # What `vercel env pull` writes into a local env file:
+        ("1", "development"),
+        ("1", None),
+        ("1", ""),
+        ("1", "Production"),
+    ],
+)
+def test_trusting_vercel_headers_off_a_vercel_deployment_fails_startup(
+    monkeypatch, vercel, vercel_env
+):
     from security.rate_limit import load_rate_limit_settings
 
     monkeypatch.setenv("TRUST_VERCEL_HEADERS", "true")
-    if vercel is None:
-        monkeypatch.delenv("VERCEL", raising=False)
-    else:
-        monkeypatch.setenv("VERCEL", vercel)
-    with pytest.raises(RuntimeError, match="TRUST_VERCEL_HEADERS is only allowed on Vercel"):
+    for name, value in (("VERCEL", vercel), ("VERCEL_ENV", vercel_env)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    with pytest.raises(RuntimeError, match="only allowed on a Vercel deployment"):
         load_rate_limit_settings()
 
 
-def test_trusting_vercel_headers_on_vercel_is_accepted(monkeypatch):
+@pytest.mark.parametrize("vercel_env", ["production", "preview"])
+def test_trusting_vercel_headers_on_a_vercel_deployment_is_accepted(monkeypatch, vercel_env):
     from security.rate_limit import load_rate_limit_settings
 
     monkeypatch.setenv("TRUST_VERCEL_HEADERS", "true")
     monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("VERCEL_ENV", vercel_env)
     assert load_rate_limit_settings().TRUST_VERCEL_HEADERS is True
 
 

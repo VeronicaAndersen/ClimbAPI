@@ -21,8 +21,10 @@ not read here, because any client can set it.
 On Vercel there is no uvicorn in front to configure, and the connection
 address is the platform's. With TRUST_VERCEL_HEADERS the client key comes
 from the ``x-real-ip`` header that Vercel's edge sets (overwriting any value
-the client sent). The setting is only accepted when VERCEL=1, so it cannot
-be switched on by mistake where clients can set that header themselves.
+the client sent). The setting is only accepted on a Vercel deployment
+(VERCEL=1 and VERCEL_ENV production or preview), so it cannot be switched on
+by mistake where clients can set that header themselves, including a local
+run with variables from `vercel env pull`.
 """
 
 import math
@@ -169,6 +171,9 @@ class RateLimitSettings(BaseModel):
         return value
 
 
+_VERCEL_DEPLOYED_ENVS = frozenset({"production", "preview"})
+
+
 def load_rate_limit_settings() -> RateLimitSettings:
     """Read overrides from the environment; invalid values fail at startup."""
     overrides = {
@@ -177,12 +182,18 @@ def load_rate_limit_settings() -> RateLimitSettings:
         if (value := os.getenv(env_var)) is not None
     }
     settings = RateLimitSettings(**overrides)
-    if settings.TRUST_VERCEL_HEADERS and os.getenv("VERCEL") != "1":
-        # Anywhere else a client could send its own x-real-ip and pick its
-        # rate-limit and throttle key freely.
+    # Anywhere but a Vercel deployment a client could send its own x-real-ip
+    # and pick its rate-limit and throttle key freely. VERCEL=1 alone is not
+    # proof: `vercel env pull` writes it into local env files, with
+    # VERCEL_ENV=development. Deployed functions get production or preview.
+    on_vercel_deployment = (
+        os.getenv("VERCEL") == "1" and os.getenv("VERCEL_ENV") in _VERCEL_DEPLOYED_ENVS
+    )
+    if settings.TRUST_VERCEL_HEADERS and not on_vercel_deployment:
         raise RuntimeError(
-            "TRUST_VERCEL_HEADERS is only allowed on Vercel (VERCEL=1). "
-            "Elsewhere, leave it unset and use uvicorn's FORWARDED_ALLOW_IPS."
+            "TRUST_VERCEL_HEADERS is only allowed on a Vercel deployment "
+            "(VERCEL=1 and VERCEL_ENV=production or preview). Elsewhere, leave it "
+            "unset and use uvicorn's FORWARDED_ALLOW_IPS."
         )
     return settings
 
