@@ -8,8 +8,9 @@ never parses a form or opens a database session.
 
 Limits are kept in process memory, which is correct for the single uvicorn
 worker the Dockerfile runs. With several workers or replicas each process
-would count on its own; switch the storage to a shared store (Redis) before
-scaling out.
+counts on its own. LOGIN_THROTTLE_BACKEND=postgres shares the login throttle
+and LOGIN_IP_LIMIT_BACKEND=postgres adds a shared per-IP limit for the login
+routes; the other per-IP route limits stay per process.
 
 The client key comes from ``security.client_address.client_ip``, based on
 ``request.client.host``. Behind a reverse proxy, uvicorn
