@@ -156,6 +156,18 @@ async def test_retry_after_is_the_max_over_the_limits(make):
     assert isinstance(await backend.acquire("alice", "10.0.0.1"), Reservation)
 
 
+async def test_retry_after_is_never_shorter_than_the_exact_wait(make):
+    """
+    Regression: Postgres rounded to the millisecond before ceil, so a wait
+    of 40.0004 s was reported as 40, shorter than the real wait.
+    """
+    backend, clock = make(max_failures=1)
+    clock.now = 1000.0004
+    await fail(backend)
+    clock.now = 1020.0
+    assert await backend.acquire("alice", IP) == 41
+
+
 async def test_full_table_fails_closed_with_oldest_expiry_wait(make):
     backend, clock = make(max_tracked=2)
     await fail(backend, username="a")

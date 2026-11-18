@@ -70,16 +70,15 @@ LANGUAGE sql IMMUTABLE AS $$
 $$;
 
 
--- Whole seconds until p_stamp leaves the window, at least 1. Rounded to the
--- millisecond first, so the microsecond nudges that keep reservation
--- timestamps unique never add a second.
+-- Whole seconds until p_stamp leaves the window, at least 1. Rounded up from
+-- the exact value (extract(epoch) is exact to the microsecond), so a
+-- Retry-After is never shorter than the real wait. The microsecond nudge
+-- that keeps a reservation timestamp unique can therefore add a second in
+-- rare same-instant cases, which errs on the safe side.
 CREATE FUNCTION public.login_throttle_wait(p_stamp timestamptz, p_window interval, p_now timestamptz)
 RETURNS integer
 LANGUAGE sql IMMUTABLE AS $$
-    SELECT greatest(
-        1,
-        ceil(round(extract(epoch FROM (p_stamp + p_window - p_now))::numeric, 3))
-    )::integer
+    SELECT greatest(1, ceil(extract(epoch FROM (p_stamp + p_window - p_now))))::integer
 $$;
 
 

@@ -359,10 +359,7 @@ $$;
 CREATE FUNCTION public.login_throttle_wait(p_stamp timestamp with time zone, p_window interval, p_now timestamp with time zone) RETURNS integer
     LANGUAGE sql IMMUTABLE
     AS $$
-    SELECT greatest(
-        1,
-        ceil(round(extract(epoch FROM (p_stamp + p_window - p_now))::numeric, 3))
-    )::integer
+    SELECT greatest(1, ceil(extract(epoch FROM (p_stamp + p_window - p_now))))::integer
 $$;
 
 
