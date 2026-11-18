@@ -65,14 +65,17 @@ async def pg_engine() -> AsyncEngine:
     await engine.dispose()
 
 
-@pytest.fixture(params=["memory", "postgres"])
+@pytest.fixture(params=["memory", "postgres", "shadow"])
 async def backend_engine(request):
-    """None for the memory backend, a clean Postgres engine for postgres."""
+    """
+    (kind, engine): no engine for the memory backend, a clean Postgres
+    engine for postgres and shadow (memory decides, Postgres alongside).
+    """
     if request.param == "memory":
-        yield None
+        yield request.param, None
         return
     engine = await open_pg_engine()
-    yield engine
+    yield request.param, engine
     await engine.dispose()
 
 

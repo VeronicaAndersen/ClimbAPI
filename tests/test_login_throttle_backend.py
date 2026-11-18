@@ -55,9 +55,31 @@ def test_factory_builds_memory_backend_from_settings():
     assert backend.throttle.max_failures == 7
 
 
-def test_factory_refuses_shadow_backend_not_implemented_yet():
-    with pytest.raises(RuntimeError, match="not implemented yet"):
-        create_login_throttle(RateLimitSettings(LOGIN_THROTTLE_BACKEND="shadow"))
+def test_factory_builds_shadow_backend_with_memory_deciding():
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from security.login_throttle_postgres import PostgresLoginThrottle
+    from security.login_throttle_shadow import ShadowLoginThrottle
+
+    engine = create_async_engine("postgresql+asyncpg://user@localhost/never-contacted")
+    backend = create_login_throttle(
+        RateLimitSettings(LOGIN_THROTTLE_BACKEND="shadow", LOGIN_MAX_FAILURES=4), engine
+    )
+    assert isinstance(backend, ShadowLoginThrottle)
+    assert isinstance(backend.memory, MemoryLoginThrottle)
+    assert isinstance(backend.postgres, PostgresLoginThrottle)
+    assert backend.memory.throttle.max_failures == 4
+    assert backend.postgres.max_failures == 4
+
+
+def test_shadow_backend_needs_an_asyncpg_engine():
+    from types import SimpleNamespace
+
+    from sqlalchemy.engine import make_url
+
+    engine = SimpleNamespace(url=make_url("sqlite+aiosqlite:///:memory:"))
+    with pytest.raises(RuntimeError, match="LOGIN_THROTTLE_BACKEND=shadow"):
+        create_login_throttle(RateLimitSettings(LOGIN_THROTTLE_BACKEND="shadow"), engine)
 
 
 def test_factory_builds_postgres_backend_without_connecting():

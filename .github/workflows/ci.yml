@@ -84,6 +84,7 @@ jobs:
             security/login_ip_limit_postgres.py \
             security/login_throttle.py \
             security/login_throttle_postgres.py \
+            security/login_throttle_shadow.py \
             security/rate_limit.py \
             tests/integration/test_integration_auth.py \
             tests/integration/test_integration_login_fallback.py \
@@ -93,6 +94,7 @@ jobs:
             tests/test_client_address.py \
             tests/test_login_throttle_backend.py \
             tests/test_login_throttle_postgres_unit.py \
+            tests/test_login_throttle_shadow.py \
             tests/test_rate_limit_settings.py
 
       - name: Run tests (including tests/pg against the service)

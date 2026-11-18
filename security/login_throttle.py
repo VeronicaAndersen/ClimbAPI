@@ -437,36 +437,24 @@ def create_login_throttle(
     """
     The login throttle selected by LOGIN_THROTTLE_BACKEND.
 
-    ``postgres`` uses the app's database engine (or ``engine``) and needs it
-    to be Postgres through asyncpg; anything else stops startup.
+    ``postgres`` and ``shadow`` use the app's database engine (or ``engine``)
+    and need it to be Postgres through asyncpg; anything else stops startup.
     """
-    if settings.LOGIN_THROTTLE_BACKEND == "postgres":
-        # Imported here: the memory backend must not need a database.
-        from security.login_ip_limit_postgres import require_asyncpg_engine
-        from security.login_throttle_postgres import PostgresLoginThrottle
+    backend = settings.LOGIN_THROTTLE_BACKEND
+    if backend == "memory":
+        return _memory_throttle(settings)
+    if backend not in ("postgres", "shadow"):
+        raise RuntimeError(f"LOGIN_THROTTLE_BACKEND={backend!r} is not supported.")
+    postgres = _postgres_throttle(settings, engine)
+    if backend == "postgres":
+        return postgres
+    # Imported here: the memory backend must not need a database.
+    from security.login_throttle_shadow import ShadowLoginThrottle
 
-        if engine is None:
-            from db.config import async_engine as engine
-        require_asyncpg_engine(engine, "LOGIN_THROTTLE_BACKEND=postgres")
-        return PostgresLoginThrottle(
-            engine,
-            max_failures=settings.LOGIN_MAX_FAILURES,
-            max_failures_per_username=settings.LOGIN_MAX_FAILURES_PER_USERNAME,
-            max_usernames_per_client=settings.LOGIN_MAX_USERNAMES_PER_CLIENT,
-            max_failures_per_prefix=settings.LOGIN_MAX_FAILURES_PER_USERNAME_PREFIX,
-            max_tracked=settings.LOGIN_THROTTLE_MAX_TRACKED,
-            pressure_ratio=settings.LOGIN_THROTTLE_PRESSURE_RATIO,
-            window_seconds=settings.LOGIN_FAILURE_WINDOW_SECONDS,
-            db_timeout_seconds=settings.LOGIN_THROTTLE_DB_TIMEOUT_SECONDS,
-            load_cache_seconds=settings.LOGIN_THROTTLE_LOAD_CACHE_SECONDS,
-            sweep_batch=settings.LOGIN_THROTTLE_SWEEP_BATCH,
-            enabled=settings.ENABLED,
-        )
-    if settings.LOGIN_THROTTLE_BACKEND != "memory":
-        raise RuntimeError(
-            f"LOGIN_THROTTLE_BACKEND={settings.LOGIN_THROTTLE_BACKEND!r} is not "
-            "implemented yet; use 'memory'."
-        )
+    return ShadowLoginThrottle(_memory_throttle(settings), postgres)
+
+
+def _memory_throttle(settings: RateLimitSettings) -> MemoryLoginThrottle:
     return MemoryLoginThrottle(
         LoginThrottle(
             max_failures=settings.LOGIN_MAX_FAILURES,
@@ -478,6 +466,30 @@ def create_login_throttle(
             window_seconds=settings.LOGIN_FAILURE_WINDOW_SECONDS,
             enabled=settings.ENABLED,
         )
+    )
+
+
+def _postgres_throttle(settings: RateLimitSettings, engine: "AsyncEngine | None"):
+    # Imported here: the memory backend must not need a database.
+    from security.login_ip_limit_postgres import require_asyncpg_engine
+    from security.login_throttle_postgres import PostgresLoginThrottle
+
+    if engine is None:
+        from db.config import async_engine as engine
+    require_asyncpg_engine(engine, f"LOGIN_THROTTLE_BACKEND={settings.LOGIN_THROTTLE_BACKEND}")
+    return PostgresLoginThrottle(
+        engine,
+        max_failures=settings.LOGIN_MAX_FAILURES,
+        max_failures_per_username=settings.LOGIN_MAX_FAILURES_PER_USERNAME,
+        max_usernames_per_client=settings.LOGIN_MAX_USERNAMES_PER_CLIENT,
+        max_failures_per_prefix=settings.LOGIN_MAX_FAILURES_PER_USERNAME_PREFIX,
+        max_tracked=settings.LOGIN_THROTTLE_MAX_TRACKED,
+        pressure_ratio=settings.LOGIN_THROTTLE_PRESSURE_RATIO,
+        window_seconds=settings.LOGIN_FAILURE_WINDOW_SECONDS,
+        db_timeout_seconds=settings.LOGIN_THROTTLE_DB_TIMEOUT_SECONDS,
+        load_cache_seconds=settings.LOGIN_THROTTLE_LOAD_CACHE_SECONDS,
+        sweep_batch=settings.LOGIN_THROTTLE_SWEEP_BATCH,
+        enabled=settings.ENABLED,
     )
 
 

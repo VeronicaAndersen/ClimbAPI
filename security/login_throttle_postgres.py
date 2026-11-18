@@ -71,7 +71,8 @@ from security.rate_limited_warning import RateLimitedWarning
 logger = logging.getLogger(__name__)
 
 _KINDS = (1, 2, 3)  # (username, client), username, (username, /48)
-_FAILED, _SUCCEEDED, _RELEASED = 1, 2, 3
+# Outcomes for finish_or_raise (login_throttle_finish's p_outcome).
+FAILED, SUCCEEDED, RELEASED = 1, 2, 3
 
 _ACQUIRE = text(
     "SELECT reserved_at, retry_after, blocked_by_capacity, blocked_by_client_cap "
@@ -97,7 +98,7 @@ _LOAD = text(
     "CAST(:limit AS integer))"
 )
 
-_DATABASE_ERRORS = (TimeoutError, SQLAlchemyError, OSError)
+DATABASE_ERRORS = (TimeoutError, SQLAlchemyError, OSError)
 
 
 class PostgresLoginThrottle:
@@ -169,18 +170,25 @@ class PostgresLoginThrottle:
 
     async def acquire(self, username: str, client_ip: str) -> Reservation | int:
         """See LoginThrottle.acquire; 429 (fail closed) if the database fails."""
+        try:
+            return await self.acquire_or_raise(username, client_ip)
+        except DATABASE_ERRORS as error:
+            logger.debug("Login throttle acquire failed (%s)", type(error).__name__)
+            self._warn_unavailable()
+            return FAIL_CLOSED_RETRY_AFTER_SECONDS
+
+    async def acquire_or_raise(self, username: str, client_ip: str) -> Reservation | int:
+        """
+        Like acquire(), but raises DATABASE_ERRORS instead of failing closed,
+        so shadow mode can tell a database problem from a real block.
+        """
         username = normalize_username(username)
         if not self.enabled:
             return Reservation(username, client_ip, None)
         # Never raises for database trouble: a failed or slow load means
         # pressure on and capacity not full (owner decision).
         load = await self._current_load()
-        try:
-            row = await self._call_acquire(username, client_ip, load)
-        except _DATABASE_ERRORS as error:
-            logger.debug("Login throttle acquire failed (%s)", type(error).__name__)
-            self._warn_unavailable()
-            return FAIL_CLOSED_RETRY_AFTER_SECONDS
+        row = await self._call_acquire(username, client_ip, load)
         if row.blocked_by_capacity:
             self._warn_full()
         if row.blocked_by_client_cap:
@@ -190,13 +198,13 @@ class PostgresLoginThrottle:
         return Reservation(username, client_ip, row.reserved_at)
 
     async def failed(self, reservation: Reservation) -> None:
-        await self._finish(_FAILED, reservation)
+        await self._finish(FAILED, reservation)
 
     async def succeeded(self, reservation: Reservation) -> None:
-        await self._finish(_SUCCEEDED, reservation)
+        await self._finish(SUCCEEDED, reservation)
 
     async def release(self, reservation: Reservation) -> None:
-        await self._finish(_RELEASED, reservation)
+        await self._finish(RELEASED, reservation)
 
     def clear(self) -> None:
         """
@@ -217,7 +225,7 @@ class PostgresLoginThrottle:
                 timeout=self._load_timeout,
             )
             load: dict[int, int] | None = {int(k): int(n) for k, n in rows}
-        except _DATABASE_ERRORS as error:
+        except DATABASE_ERRORS as error:
             # A timeout too: cached like any failure, so the following logins
             # do not each wait for the slow query again.
             logger.debug("Login throttle load query failed (%s)", type(error).__name__)
@@ -298,6 +306,17 @@ class PostgresLoginThrottle:
         raise AssertionError("unreachable")  # pragma: no cover
 
     async def _finish(self, outcome: int, reservation: Reservation) -> None:
+        try:
+            await self.finish_or_raise(outcome, reservation)
+        except DATABASE_ERRORS as error:
+            logger.debug("Login throttle finish failed (%s)", type(error).__name__)
+            self._warn_finish_failed()
+
+    async def finish_or_raise(self, outcome: int, reservation: Reservation) -> None:
+        """
+        Record FAILED, SUCCEEDED or RELEASED for a reservation; raises
+        DATABASE_ERRORS instead of logging them (for shadow mode).
+        """
         if not self.enabled or reservation.at is None:
             return
         if not isinstance(reservation.at, datetime):
@@ -316,8 +335,4 @@ class PostgresLoginThrottle:
             "sweep_batch": self._sweep_batch,
             "now": self._now(),
         }
-        try:
-            await self._execute(_FINISH, params, timeout=self._db_timeout)
-        except _DATABASE_ERRORS as error:
-            logger.debug("Login throttle finish failed (%s)", type(error).__name__)
-            self._warn_finish_failed()
+        await self._execute(_FINISH, params, timeout=self._db_timeout)

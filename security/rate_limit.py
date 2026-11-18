@@ -117,10 +117,10 @@ class RateLimitSettings(BaseModel):
     # Take the client IP from Vercel's x-real-ip header instead of the
     # connection address. Only allowed when running on Vercel (VERCEL=1).
     TRUST_VERCEL_HEADERS: bool = False
-    # Where the login throttle keeps its counters: "memory" (this process)
-    # or "postgres" (shared by all instances, security/login_throttle_postgres.py).
-    # "shadow" (memory decides, Postgres runs alongside for comparison) is
-    # planned and still stops startup.
+    # Where the login throttle keeps its counters: "memory" (this process),
+    # "postgres" (shared by all instances, security/login_throttle_postgres.py)
+    # or "shadow" (memory decides, Postgres runs alongside and the two are
+    # compared, security/login_throttle_shadow.py).
     LOGIN_THROTTLE_BACKEND: Literal["memory", "postgres", "shadow"] = "memory"
     # For the Postgres backend and the shared login IP limit: upper bound for
     # each query (the optional load reading gets a third of it).

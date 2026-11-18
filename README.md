@@ -102,7 +102,7 @@ The auth endpoints are rate limited per client IP, and failed logins are also li
 | `LOGIN_MAX_USERNAMES_PER_CLIENT` | `20` | Distinct usernames one client may have recent failures on; past this it gets `429` for new usernames. Only enforced while the throttle is under pressure |
 | `LOGIN_THROTTLE_MAX_TRACKED` | `200000` | Entries kept per throttle counter. A failed login costs about 550-750 bytes from IPv4 and up to about 1 KB from IPv6 (short to 200-character usernames; a key is never longer than 200 characters, even when NFKC expands the typed name), so at most about 210 MB when full |
 | `LOGIN_THROTTLE_PRESSURE_RATIO` | `0.1` | The throttle counts as under pressure once a counter holds this share of `LOGIN_THROTTLE_MAX_TRACKED` (20,000 keys by default). `0` enforces the per-client cap always, `1` only when full |
-| `LOGIN_THROTTLE_BACKEND` | `memory` | Where the login throttle keeps its counters: `memory` (this process) or `postgres` (shared by all instances; needs the app's database to be Postgres and the `login_throttle` migration). `shadow` is planned and currently stops the app at startup |
+| `LOGIN_THROTTLE_BACKEND` | `memory` | Where the login throttle keeps its counters: `memory` (this process), `postgres` (shared by all instances; needs the app's database to be Postgres and the `login_throttle` migration) or `shadow` (memory decides, Postgres runs alongside for comparison; same requirements as `postgres`) |
 | `LOGIN_THROTTLE_DB_TIMEOUT_SECONDS` | `3` | Postgres throttle and shared IP limit: upper bound for each query, including waiting for a connection (must be positive). Advisory-lock waits inside the database get half of it |
 | `LOGIN_THROTTLE_LOAD_CACHE_SECONDS` | `5` | Postgres throttle: how long each instance reuses its reading of how full the throttle is (must be positive) |
 | `LOGIN_IP_LIMIT_BACKEND` | `memory` | `postgres` adds the `RATE_LIMIT_LOGIN` limit for `/auth/login` and `/auth/token` counted across all instances, after the in-memory one. For hosting without a shared rate-limit layer such as WAF rules |
@@ -127,6 +127,20 @@ Counters are kept in memory, which works because the container runs a single uvi
 - `LOGIN_IP_LIMIT_BACKEND=postgres` adds a shared per-IP limit for `/auth/login` and `/auth/token` with the same `RATE_LIMIT_LOGIN` rules as the in-memory limiter (fixed windows from the first request, every limit checked before any is counted). It has its own small `login_ip_limit` table of counters rather than rows in the throttle table, so it never affects the throttle's pressure or capacity.
 
 If the database is slow (`LOGIN_THROTTLE_DB_TIMEOUT_SECONDS`) or unavailable, logins are refused with `429` and `Retry-After: 10`: long enough not to hammer a struggling database, short enough that a brief outage or cold start does not lock users out for long. A limit that silently stopped counting would fail open. If only the reading of how full the throttle is fails, the throttle assumes it is under pressure but not full. If recording a login's outcome fails, the login still answers normally; the attempt stays counted as a failure. Warnings for all of these are rate-limited and contain no usernames or addresses.
+
+**Shadow mode for the rollout.** With `LOGIN_THROTTLE_BACKEND=shadow` the in-memory throttle answers every login exactly as with `memory`, and the Postgres throttle runs alongside it, so its tables fill as they would in production and the two can be compared before switching. Postgres never changes a response: its 429s and its fail-closed answers are ignored, its errors and timeouts are only counted, and a login waits at most 0.5 s for it at any point (on an allowed login its check runs while the password is hashed). Each store keeps its own reservation, so both record failures, successes and released attempts. At most once a minute a warning line with counts only (no usernames or addresses) summarises the period:
+
+```
+Login throttle shadow (last 60 s): calls=812 postgres_errors=0 postgres_timeouts=1 postgres_blocked_memory_allowed=3 memory_blocked_postgres_allowed=0 slow=2
+```
+
+- `calls`: logins checked in the period.
+- `postgres_blocked_memory_allowed`: Postgres would have refused a login that memory let through. Expected in small numbers on several instances, since Postgres sees failures from all of them; a large count means switching to `postgres` would refuse noticeably more logins.
+- `memory_blocked_postgres_allowed`: memory refused a login Postgres would have allowed. Should stay near 0; otherwise the two disagree on the rules.
+- `postgres_errors`, `postgres_timeouts`: the database failed or did not answer within 0.5 s (or `LOGIN_THROTTLE_DB_TIMEOUT_SECONDS`). After a switch to `postgres` these would be refused logins (429).
+- `slow`: Postgres calls that took over 0.25 s. They show the latency `postgres` would add.
+
+Switch to `postgres` once errors and timeouts stay at or near 0 and the disagreements are explained.
 
 **Behind a reverse proxy** the limiter must see the real client IP. The app uses the connection address and does not read `X-Forwarded-For` itself, because clients can forge it. The Docker image runs uvicorn with `--proxy-headers` and trusts those headers only from the addresses in `FORWARDED_ALLOW_IPS` (uvicorn reads this variable itself; the image passes it explicitly):
 

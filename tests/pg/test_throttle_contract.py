@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 from security.login_throttle import LoginThrottle, MemoryLoginThrottle, Reservation
 from security.login_throttle_postgres import PostgresLoginThrottle
+from security.login_throttle_shadow import ShadowLoginThrottle
 from tests.pg.conftest import stored_rows
 
 EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
@@ -37,24 +38,33 @@ LIMITS = {
 
 
 @pytest.fixture()
-def make(backend_engine):
+async def make(backend_engine):
     """make(**limits) -> (backend, clock) for the backend under test."""
+    kind, engine = backend_engine
+    shadows: list[ShadowLoginThrottle] = []
 
     def build(**overrides):
         clock = FakeClock()
         limits = {**LIMITS, **overrides}
-        if backend_engine is None:
-            return MemoryLoginThrottle(LoginThrottle(clock=clock, **limits)), clock
-        backend = PostgresLoginThrottle(
-            backend_engine,
+        memory = MemoryLoginThrottle(LoginThrottle(clock=clock, **limits))
+        if kind == "memory":
+            return memory, clock
+        postgres = PostgresLoginThrottle(
+            engine,
             **limits,
             load_cache_seconds=0,  # read pressure and capacity on every call
             now=lambda: EPOCH + timedelta(seconds=clock.now),
             monotonic=clock,
         )
-        return backend, clock
+        if kind == "postgres":
+            return postgres, clock
+        shadow = ShadowLoginThrottle(memory, postgres, wait_seconds=2.0)
+        shadows.append(shadow)
+        return shadow, clock
 
-    return build
+    yield build
+    for shadow in shadows:
+        await shadow.drain()  # no Postgres task outlives the engine
 
 
 async def fail(backend, username="alice", ip=IP, times=1):
