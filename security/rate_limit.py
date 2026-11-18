@@ -28,7 +28,7 @@ be switched on by mistake where clients can set that header themselves.
 import math
 import os
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, Literal, TypeVar
 
@@ -66,6 +66,7 @@ _ENV_VARS = {
     "LOGIN_THROTTLE_BACKEND": "LOGIN_THROTTLE_BACKEND",
     "LOGIN_THROTTLE_DB_TIMEOUT_SECONDS": "LOGIN_THROTTLE_DB_TIMEOUT_SECONDS",
     "LOGIN_THROTTLE_LOAD_CACHE_SECONDS": "LOGIN_THROTTLE_LOAD_CACHE_SECONDS",
+    "LOGIN_IP_LIMIT_BACKEND": "LOGIN_IP_LIMIT_BACKEND",
     "LOGIN": "RATE_LIMIT_LOGIN",
     "SIGNUP": "RATE_LIMIT_SIGNUP",
     "PASSWORD_RESET_REQUEST": "RATE_LIMIT_PASSWORD_RESET_REQUEST",
@@ -121,6 +122,10 @@ class RateLimitSettings(BaseModel):
     LOGIN_THROTTLE_DB_TIMEOUT_SECONDS: float = 3.0
     # For the Postgres backend: how long a load reading may be reused.
     LOGIN_THROTTLE_LOAD_CACHE_SECONDS: float = 5.0
+    # "postgres" adds a per-IP LOGIN limit shared by all instances (after the
+    # in-memory one), for hosting without a shared rate-limit layer such as
+    # WAF rules. Uses LOGIN_THROTTLE_DB_TIMEOUT_SECONDS.
+    LOGIN_IP_LIMIT_BACKEND: Literal["memory", "postgres"] = "memory"
 
     @field_validator(
         "LOGIN", "SIGNUP", "PASSWORD_RESET_REQUEST", "PASSWORD_RESET_CONFIRM", "REFRESH"
@@ -205,9 +210,19 @@ class RateLimiter:
 
         return decorator
 
-    def shared_limit(self, value: str, scope: str) -> Callable[[EndpointT], EndpointT]:
-        """Limit several endpoints on one budget, identified by ``scope``."""
-        route_limit = RouteLimit(self, tuple(parse_many(value)), scope)
+    def shared_limit(
+        self,
+        value: str,
+        scope: str,
+        shared: "Callable[[str], Awaitable[int | None]] | None" = None,
+    ) -> Callable[[EndpointT], EndpointT]:
+        """
+        Limit several endpoints on one budget, identified by ``scope``.
+
+        ``shared`` is an optional second check, counted across instances
+        (e.g. in Postgres), run only when the in-memory check passes.
+        """
+        route_limit = RouteLimit(self, tuple(parse_many(value)), scope, shared)
 
         def decorator(endpoint: EndpointT) -> EndpointT:
             return _attach(endpoint, route_limit)
@@ -243,9 +258,14 @@ class RouteLimit:
     limiter: RateLimiter
     items: tuple[RateLimitItem, ...]
     scope: str
+    shared: "Callable[[str], Awaitable[int | None]] | None" = None
 
-    def check(self, request: Request) -> int | None:
-        return self.limiter.hit(self.items, self.scope, client_ip(request))
+    async def check(self, request: Request) -> int | None:
+        key = client_ip(request)
+        retry_after = self.limiter.hit(self.items, self.scope, key)
+        if retry_after is not None or self.shared is None or not self.limiter.enabled:
+            return retry_after
+        return await self.shared(key)
 
 
 def _attach(endpoint: EndpointT, route_limit: RouteLimit) -> EndpointT:
@@ -275,7 +295,7 @@ class RateLimitedRoute(APIRoute):
             return handler
 
         async def rate_limited_handler(request: Request) -> Response:
-            retry_after = route_limit.check(request)
+            retry_after = await route_limit.check(request)
             if retry_after is not None:
                 return too_many_requests_response(retry_after)
             return await handler(request)
@@ -285,8 +305,30 @@ class RateLimitedRoute(APIRoute):
 
 limiter = RateLimiter(enabled=rate_limit_settings.ENABLED)
 
+def _shared_login_ip_limit(
+    settings: RateLimitSettings,
+) -> "Callable[[str], Awaitable[int | None]] | None":
+    """The shared per-IP login limit when LOGIN_IP_LIMIT_BACKEND=postgres."""
+    if settings.LOGIN_IP_LIMIT_BACKEND != "postgres":
+        return None
+    # Imported here: the default setup must not need a database.
+    from db.config import async_engine
+    from security.login_ip_limit_postgres import PostgresIpLimit, require_asyncpg_engine
+
+    require_asyncpg_engine(async_engine, "LOGIN_IP_LIMIT_BACKEND=postgres")
+    return PostgresIpLimit(
+        async_engine,
+        tuple(parse_many(settings.LOGIN)),
+        db_timeout_seconds=settings.LOGIN_THROTTLE_DB_TIMEOUT_SECONDS,
+    ).hit
+
+
 # /login and /token accept the same credentials, so they share one budget.
-login_rate_limit = limiter.shared_limit(rate_limit_settings.LOGIN, scope="auth-login")
+login_rate_limit = limiter.shared_limit(
+    rate_limit_settings.LOGIN,
+    scope="auth-login",
+    shared=_shared_login_ip_limit(rate_limit_settings),
+)
 signup_rate_limit = limiter.limit(rate_limit_settings.SIGNUP)
 password_reset_request_rate_limit = limiter.limit(
     rate_limit_settings.PASSWORD_RESET_REQUEST

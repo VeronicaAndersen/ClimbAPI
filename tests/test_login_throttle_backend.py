@@ -55,10 +55,36 @@ def test_factory_builds_memory_backend_from_settings():
     assert backend.throttle.max_failures == 7
 
 
-@pytest.mark.parametrize("name", ["postgres", "shadow"])
-def test_factory_refuses_backends_not_implemented_yet(name):
+def test_factory_refuses_shadow_backend_not_implemented_yet():
     with pytest.raises(RuntimeError, match="not implemented yet"):
-        create_login_throttle(RateLimitSettings(LOGIN_THROTTLE_BACKEND=name))
+        create_login_throttle(RateLimitSettings(LOGIN_THROTTLE_BACKEND="shadow"))
+
+
+def test_factory_builds_postgres_backend_without_connecting():
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from security.login_throttle_postgres import PostgresLoginThrottle
+
+    engine = create_async_engine("postgresql+asyncpg://user@localhost/never-contacted")
+    backend = create_login_throttle(
+        RateLimitSettings(LOGIN_THROTTLE_BACKEND="postgres", LOGIN_MAX_FAILURES=4), engine
+    )
+    assert isinstance(backend, PostgresLoginThrottle)
+    assert backend.max_failures == 4
+
+
+@pytest.mark.parametrize(
+    "url", ["sqlite+aiosqlite:///:memory:", "postgresql+psycopg://user@localhost/db"]
+)
+def test_postgres_backend_needs_an_asyncpg_engine(url):
+    from types import SimpleNamespace
+
+    from sqlalchemy.engine import make_url
+
+    # Only the URL is checked, so no driver needs to be installed.
+    engine = SimpleNamespace(url=make_url(url))
+    with pytest.raises(RuntimeError, match="asyncpg"):
+        create_login_throttle(RateLimitSettings(LOGIN_THROTTLE_BACKEND="postgres"), engine)
 
 
 def test_every_method_completes_without_suspending():
