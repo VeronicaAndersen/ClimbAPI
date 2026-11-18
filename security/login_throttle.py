@@ -459,6 +459,7 @@ def create_login_throttle(
             window_seconds=settings.LOGIN_FAILURE_WINDOW_SECONDS,
             db_timeout_seconds=settings.LOGIN_THROTTLE_DB_TIMEOUT_SECONDS,
             load_cache_seconds=settings.LOGIN_THROTTLE_LOAD_CACHE_SECONDS,
+            sweep_batch=settings.LOGIN_THROTTLE_SWEEP_BATCH,
             enabled=settings.ENABLED,
         )
     if settings.LOGIN_THROTTLE_BACKEND != "memory":

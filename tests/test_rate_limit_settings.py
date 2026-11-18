@@ -110,3 +110,18 @@ def test_login_throttle_seconds_must_be_positive(monkeypatch, name, value):
 def test_login_throttle_seconds_accept_fractions(monkeypatch, name):
     monkeypatch.setenv(name, "0.5")
     assert getattr(load_rate_limit_settings(), name) == 0.5
+
+
+
+def test_sweep_batch_default_and_override(monkeypatch):
+    monkeypatch.delenv("LOGIN_THROTTLE_SWEEP_BATCH", raising=False)
+    assert load_rate_limit_settings().LOGIN_THROTTLE_SWEEP_BATCH == 200
+    monkeypatch.setenv("LOGIN_THROTTLE_SWEEP_BATCH", "500")
+    assert load_rate_limit_settings().LOGIN_THROTTLE_SWEEP_BATCH == 500
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "many"])
+def test_sweep_batch_must_be_positive(monkeypatch, value):
+    monkeypatch.setenv("LOGIN_THROTTLE_SWEEP_BATCH", value)
+    with pytest.raises(ValidationError):
+        load_rate_limit_settings()

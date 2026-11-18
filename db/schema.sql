@@ -36,10 +36,10 @@ CREATE TYPE public.user_scope_t AS ENUM (
 
 
 --
--- Name: login_ip_limit_hit(text, integer[], integer[], integer, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
+-- Name: login_ip_limit_hit(text, integer[], integer[], integer, integer, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.login_ip_limit_hit(p_client text, p_amounts integer[], p_periods integer[], p_lock_timeout_ms integer, p_now timestamp with time zone DEFAULT NULL::timestamp with time zone, OUT retry_after integer) RETURNS integer
+CREATE FUNCTION public.login_ip_limit_hit(p_client text, p_amounts integer[], p_periods integer[], p_lock_timeout_ms integer, p_sweep_batch integer, p_now timestamp with time zone DEFAULT NULL::timestamp with time zone, OUT retry_after integer) RETURNS integer
     LANGUAGE plpgsql
     SET search_path TO 'pg_catalog', 'public'
     AS $$
@@ -85,7 +85,7 @@ BEGIN
         SELECT l.ctid FROM public.login_ip_limit AS l
         WHERE l.expires_at <= v_now
         ORDER BY l.expires_at
-        LIMIT 16
+        LIMIT greatest(p_sweep_batch, 0)
         FOR UPDATE SKIP LOCKED
     ));
 END
@@ -93,10 +93,10 @@ $$;
 
 
 --
--- Name: login_throttle_acquire(text, text, text, interval, integer, integer, integer, integer, boolean, smallint[], integer, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
+-- Name: login_throttle_acquire(text, text, text, interval, integer, integer, integer, integer, boolean, smallint[], integer, integer, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.login_throttle_acquire(p_username text, p_client text, p_site text, p_window interval, p_max_failures integer, p_max_per_username integer, p_max_per_prefix integer, p_max_usernames_per_client integer, p_under_pressure boolean, p_full_kinds smallint[], p_lock_timeout_ms integer, p_now timestamp with time zone DEFAULT NULL::timestamp with time zone, OUT reserved_at timestamp with time zone, OUT retry_after integer, OUT blocked_by_capacity boolean, OUT blocked_by_client_cap boolean) RETURNS record
+CREATE FUNCTION public.login_throttle_acquire(p_username text, p_client text, p_site text, p_window interval, p_max_failures integer, p_max_per_username integer, p_max_per_prefix integer, p_max_usernames_per_client integer, p_under_pressure boolean, p_full_kinds smallint[], p_lock_timeout_ms integer, p_sweep_batch integer, p_now timestamp with time zone DEFAULT NULL::timestamp with time zone, OUT reserved_at timestamp with time zone, OUT retry_after integer, OUT blocked_by_capacity boolean, OUT blocked_by_client_cap boolean) RETURNS record
     LANGUAGE plpgsql
     SET search_path TO 'pg_catalog', 'public'
     AS $$
@@ -237,24 +237,17 @@ BEGIN
         retry_after := (SELECT max(w) FROM unnest(v_waits) AS w);
     END IF;
 
-    -- Sweep a bounded batch of expired keys (any kind).
-    DELETE FROM public.login_throttle_key
-    WHERE ctid = ANY (ARRAY(
-        SELECT k.ctid FROM public.login_throttle_key AS k
-        WHERE k.last_at <= v_cutoff
-        ORDER BY k.last_at
-        LIMIT 16
-        FOR UPDATE SKIP LOCKED
-    ));
+    -- Last, after every write: see login_throttle_sweep.
+    PERFORM public.login_throttle_sweep(v_cutoff, p_sweep_batch);
 END
 $$;
 
 
 --
--- Name: login_throttle_finish(smallint, text, text, text, timestamp with time zone, interval, integer, smallint[], integer, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
+-- Name: login_throttle_finish(smallint, text, text, text, timestamp with time zone, interval, integer, smallint[], integer, integer, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.login_throttle_finish(p_outcome smallint, p_username text, p_client text, p_site text, p_at timestamp with time zone, p_window interval, p_max_per_username integer, p_full_kinds smallint[], p_lock_timeout_ms integer, p_now timestamp with time zone DEFAULT NULL::timestamp with time zone) RETURNS void
+CREATE FUNCTION public.login_throttle_finish(p_outcome smallint, p_username text, p_client text, p_site text, p_at timestamp with time zone, p_window interval, p_max_per_username integer, p_full_kinds smallint[], p_lock_timeout_ms integer, p_sweep_batch integer, p_now timestamp with time zone DEFAULT NULL::timestamp with time zone) RETURNS void
     LANGUAGE plpgsql
     SET search_path TO 'pg_catalog', 'public'
     AS $$
@@ -283,23 +276,28 @@ BEGIN
                     (SELECT max(s) FROM unnest(k.stamps) AS s WHERE s > v_cutoff)
                 );
         END IF;
-        RETURN;
+    ELSE
+        PERFORM set_config('lock_timeout', p_lock_timeout_ms::text || 'ms', true);
+        PERFORM pg_advisory_xact_lock(1, hashtext(p_username || '|' || coalesce(p_site, p_client)));
+        PERFORM pg_advisory_xact_lock(2, hashtext(p_client));
+        IF p_outcome = 2 THEN
+            -- Proving the password resets this client's failures for the name.
+            DELETE FROM public.login_throttle_key AS k
+            WHERE k.kind = 1 AND k.username = p_username AND k.scope = p_client;
+        ELSE
+            PERFORM public.login_throttle_withdraw(1::smallint, p_username, p_client, p_at);
+        END IF;
+        IF p_site IS NOT NULL THEN
+            -- Only this attempt's own /48 stamp; other failures there stay.
+            PERFORM public.login_throttle_withdraw(3::smallint, p_username, p_site, p_at);
+        END IF;
     END IF;
 
-    PERFORM set_config('lock_timeout', p_lock_timeout_ms::text || 'ms', true);
-    PERFORM pg_advisory_xact_lock(1, hashtext(p_username || '|' || coalesce(p_site, p_client)));
-    PERFORM pg_advisory_xact_lock(2, hashtext(p_client));
-    IF p_outcome = 2 THEN
-        -- Proving the password resets this client's failures for the name.
-        DELETE FROM public.login_throttle_key AS k
-        WHERE k.kind = 1 AND k.username = p_username AND k.scope = p_client;
-    ELSE
-        PERFORM public.login_throttle_withdraw(1::smallint, p_username, p_client, p_at);
-    END IF;
-    IF p_site IS NOT NULL THEN
-        -- Only this attempt's own /48 stamp; other failures there stay.
-        PERFORM public.login_throttle_withdraw(3::smallint, p_username, p_site, p_at);
-    END IF;
+    -- Every outcome sweeps, so rows are cleaned on every login that reaches
+    -- the database. Last, after every write and lock wait: a sweep's row
+    -- locks taken before the advisory locks could deadlock with an acquire
+    -- that upserts onto an expired row.
+    PERFORM public.login_throttle_sweep(v_cutoff, p_sweep_batch);
 END
 $$;
 
@@ -349,6 +347,28 @@ CREATE FUNCTION public.login_throttle_recent(p_stamps timestamp with time zone[]
     LANGUAGE sql IMMUTABLE
     AS $$
     SELECT array_agg(s ORDER BY s) FROM unnest(p_stamps) AS s WHERE s > p_cutoff
+$$;
+
+
+--
+-- Name: login_throttle_sweep(timestamp with time zone, integer); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.login_throttle_sweep(p_cutoff timestamp with time zone, p_batch integer) RETURNS integer
+    LANGUAGE sql
+    AS $$
+    WITH swept AS (
+        DELETE FROM public.login_throttle_key
+        WHERE ctid = ANY (ARRAY(
+            SELECT k.ctid FROM public.login_throttle_key AS k
+            WHERE k.last_at <= p_cutoff
+            ORDER BY k.last_at
+            LIMIT greatest(p_batch, 0)
+            FOR UPDATE SKIP LOCKED
+        ))
+        RETURNING 1
+    )
+    SELECT count(*)::integer FROM swept
 $$;
 
 

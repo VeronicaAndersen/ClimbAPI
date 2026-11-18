@@ -41,7 +41,8 @@ FAIL_CLOSED_RETRY_AFTER_SECONDS = 10
 _HIT = text(
     "SELECT retry_after FROM public.login_ip_limit_hit("
     "CAST(:client AS text), CAST(:amounts AS integer[]), CAST(:periods AS integer[]), "
-    "CAST(:lock_timeout_ms AS integer), CAST(:now AS timestamptz))"
+    "CAST(:lock_timeout_ms AS integer), CAST(:sweep_batch AS integer), "
+    "CAST(:now AS timestamptz))"
 )
 
 
@@ -69,6 +70,7 @@ class PostgresIpLimit:
         items: tuple[RateLimitItem, ...],
         *,
         db_timeout_seconds: float,
+        sweep_batch: int = 200,
         now: Callable[[], datetime | None] = lambda: None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -77,6 +79,7 @@ class PostgresIpLimit:
         self._periods = [int(item.get_expiry()) for item in items]
         self._db_timeout = db_timeout_seconds
         self._lock_timeout_ms = lock_timeout_ms(db_timeout_seconds)
+        self._sweep_batch = sweep_batch
         self._now = now
         self._warn_unavailable = RateLimitedWarning(
             logger,
@@ -92,6 +95,7 @@ class PostgresIpLimit:
             "amounts": self._amounts,
             "periods": self._periods,
             "lock_timeout_ms": self._lock_timeout_ms,
+            "sweep_batch": self._sweep_batch,
             "now": self._now(),
         }
         try:

@@ -5,9 +5,12 @@
 --   kind 1: (username, client)   scope = client key (IPv4 or IPv6 /64)
 --   kind 2: username             scope = ''
 --   kind 3: (username, IPv6 /48) scope = /48 network
--- Usernames and client keys are stored in plain text; rows live for one
--- failure window (15 minutes by default). Logged on purpose: an UNLOGGED
--- table is emptied when a Neon compute restarts, which would fail open.
+-- Usernames and client keys are stored in plain text (owner's choice).
+-- Expired rows are deleted in bounded batches during logins (acquire and
+-- finish, see login_throttle_sweep); on an idle app they stay until the
+-- next login, and deleted rows remain in Neon's restore history for its
+-- retention period. Logged on purpose: an UNLOGGED table is emptied when a
+-- Neon compute restarts, which would fail open.
 CREATE TABLE public.login_throttle_key (
     kind smallint NOT NULL CHECK (kind IN (1, 2, 3)),
     username text NOT NULL CHECK (char_length(username) <= 200),
@@ -82,6 +85,28 @@ LANGUAGE sql IMMUTABLE AS $$
 $$;
 
 
+-- Delete up to p_batch expired keys (any kind), oldest first; returns how
+-- many. SKIP LOCKED: rows another call holds are left for a later sweep, so
+-- sweeps never wait on each other or on acquires. Call it last in a
+-- statement: its row locks then cannot be part of a wait cycle.
+CREATE FUNCTION public.login_throttle_sweep(p_cutoff timestamptz, p_batch integer)
+RETURNS integer
+LANGUAGE sql VOLATILE AS $$
+    WITH swept AS (
+        DELETE FROM public.login_throttle_key
+        WHERE ctid = ANY (ARRAY(
+            SELECT k.ctid FROM public.login_throttle_key AS k
+            WHERE k.last_at <= p_cutoff
+            ORDER BY k.last_at
+            LIMIT greatest(p_batch, 0)
+            FOR UPDATE SKIP LOCKED
+        ))
+        RETURNING 1
+    )
+    SELECT count(*)::integer FROM swept
+$$;
+
+
 -- Check every limit and, if none blocks, reserve the attempt, in one call.
 -- Port of LoginThrottle._retry_after/acquire (security/login_throttle.py).
 -- Transaction-scoped advisory locks on (username, /48 or client) and then the
@@ -102,6 +127,7 @@ CREATE FUNCTION public.login_throttle_acquire(
     p_under_pressure boolean,
     p_full_kinds smallint[],
     p_lock_timeout_ms integer,
+    p_sweep_batch integer,
     p_now timestamptz DEFAULT NULL,
     OUT reserved_at timestamptz,
     OUT retry_after integer,
@@ -249,15 +275,8 @@ BEGIN
         retry_after := (SELECT max(w) FROM unnest(v_waits) AS w);
     END IF;
 
-    -- Sweep a bounded batch of expired keys (any kind).
-    DELETE FROM public.login_throttle_key
-    WHERE ctid = ANY (ARRAY(
-        SELECT k.ctid FROM public.login_throttle_key AS k
-        WHERE k.last_at <= v_cutoff
-        ORDER BY k.last_at
-        LIMIT 16
-        FOR UPDATE SKIP LOCKED
-    ));
+    -- Last, after every write: see login_throttle_sweep.
+    PERFORM public.login_throttle_sweep(v_cutoff, p_sweep_batch);
 END
 $$;
 
@@ -280,6 +299,7 @@ CREATE FUNCTION public.login_throttle_finish(
     p_max_per_username integer,
     p_full_kinds smallint[],
     p_lock_timeout_ms integer,
+    p_sweep_batch integer,
     p_now timestamptz DEFAULT NULL
 )
 RETURNS void
@@ -312,23 +332,28 @@ BEGIN
                     (SELECT max(s) FROM unnest(k.stamps) AS s WHERE s > v_cutoff)
                 );
         END IF;
-        RETURN;
+    ELSE
+        PERFORM set_config('lock_timeout', p_lock_timeout_ms::text || 'ms', true);
+        PERFORM pg_advisory_xact_lock(1, hashtext(p_username || '|' || coalesce(p_site, p_client)));
+        PERFORM pg_advisory_xact_lock(2, hashtext(p_client));
+        IF p_outcome = 2 THEN
+            -- Proving the password resets this client's failures for the name.
+            DELETE FROM public.login_throttle_key AS k
+            WHERE k.kind = 1 AND k.username = p_username AND k.scope = p_client;
+        ELSE
+            PERFORM public.login_throttle_withdraw(1::smallint, p_username, p_client, p_at);
+        END IF;
+        IF p_site IS NOT NULL THEN
+            -- Only this attempt's own /48 stamp; other failures there stay.
+            PERFORM public.login_throttle_withdraw(3::smallint, p_username, p_site, p_at);
+        END IF;
     END IF;
 
-    PERFORM set_config('lock_timeout', p_lock_timeout_ms::text || 'ms', true);
-    PERFORM pg_advisory_xact_lock(1, hashtext(p_username || '|' || coalesce(p_site, p_client)));
-    PERFORM pg_advisory_xact_lock(2, hashtext(p_client));
-    IF p_outcome = 2 THEN
-        -- Proving the password resets this client's failures for the name.
-        DELETE FROM public.login_throttle_key AS k
-        WHERE k.kind = 1 AND k.username = p_username AND k.scope = p_client;
-    ELSE
-        PERFORM public.login_throttle_withdraw(1::smallint, p_username, p_client, p_at);
-    END IF;
-    IF p_site IS NOT NULL THEN
-        -- Only this attempt's own /48 stamp; other failures there stay.
-        PERFORM public.login_throttle_withdraw(3::smallint, p_username, p_site, p_at);
-    END IF;
+    -- Every outcome sweeps, so rows are cleaned on every login that reaches
+    -- the database. Last, after every write and lock wait: a sweep's row
+    -- locks taken before the advisory locks could deadlock with an acquire
+    -- that upserts onto an expired row.
+    PERFORM public.login_throttle_sweep(v_cutoff, p_sweep_batch);
 END
 $$;
 
@@ -380,6 +405,7 @@ CREATE FUNCTION public.login_ip_limit_hit(
     p_amounts integer[],
     p_periods integer[],
     p_lock_timeout_ms integer,
+    p_sweep_batch integer,
     p_now timestamptz DEFAULT NULL,
     OUT retry_after integer
 )
@@ -429,7 +455,7 @@ BEGIN
         SELECT l.ctid FROM public.login_ip_limit AS l
         WHERE l.expires_at <= v_now
         ORDER BY l.expires_at
-        LIMIT 16
+        LIMIT greatest(p_sweep_batch, 0)
         FOR UPDATE SKIP LOCKED
     ));
 END
@@ -438,11 +464,12 @@ $$;
 
 -- migrate:down
 
-DROP FUNCTION IF EXISTS public.login_ip_limit_hit(text, integer[], integer[], integer, timestamptz);
+DROP FUNCTION IF EXISTS public.login_ip_limit_hit(text, integer[], integer[], integer, integer, timestamptz);
 DROP FUNCTION IF EXISTS public.login_throttle_load(timestamptz, integer);
-DROP FUNCTION IF EXISTS public.login_throttle_finish(smallint, text, text, text, timestamptz, interval, integer, smallint[], integer, timestamptz);
+DROP FUNCTION IF EXISTS public.login_throttle_finish(smallint, text, text, text, timestamptz, interval, integer, smallint[], integer, integer, timestamptz);
 DROP FUNCTION IF EXISTS public.login_throttle_withdraw(smallint, text, text, timestamptz);
-DROP FUNCTION IF EXISTS public.login_throttle_acquire(text, text, text, interval, integer, integer, integer, integer, boolean, smallint[], integer, timestamptz);
+DROP FUNCTION IF EXISTS public.login_throttle_acquire(text, text, text, interval, integer, integer, integer, integer, boolean, smallint[], integer, integer, timestamptz);
+DROP FUNCTION IF EXISTS public.login_throttle_sweep(timestamptz, integer);
 DROP FUNCTION IF EXISTS public.login_throttle_wait(timestamptz, interval, timestamptz);
 DROP FUNCTION IF EXISTS public.login_throttle_push(timestamptz[], timestamptz, timestamptz, integer);
 DROP FUNCTION IF EXISTS public.login_throttle_recent(timestamptz[], timestamptz);

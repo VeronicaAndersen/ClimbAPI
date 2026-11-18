@@ -303,14 +303,94 @@ async def test_expired_keys_are_swept_on_write(pg_engine):
     assert [(row.kind, row.username) for row in rows] == [(1, "fresh")]
 
 
-async def test_sweep_is_bounded_per_write(pg_engine):
-    clock = {"now": 0.0}
-    backend = throttle(pg_engine, clock_seconds=lambda: clock["now"])
-    for i in range(20):
-        await backend.acquire(f"old{i}", IP)
+async def _expired_client_keys(backend, clock, count: int) -> None:
+    """``count`` (username, client) keys at t=0, expired from t=60 on."""
+    clock["now"] = 0.0
+    for i in range(count):
+        assert isinstance(await backend.acquire(f"old{i:03d}", IP), Reservation)
     clock["now"] = 61.0
+
+
+async def test_acquire_sweeps_up_to_the_batch_size(pg_engine):
+    clock = {"now": 0.0}
+    backend = throttle(pg_engine, clock_seconds=lambda: clock["now"], sweep_batch=5)
+    await _expired_client_keys(backend, clock, 12)
     await backend.acquire("fresh", IP)
-    assert len(await stored_rows(pg_engine)) == 20 - 16 + 1
+    assert len(await stored_rows(pg_engine)) == 12 - 5 + 1
+    await backend.acquire("fresh2", IP)
+    assert len(await stored_rows(pg_engine)) == 12 - 10 + 2
+
+
+@pytest.mark.parametrize("outcome", ["failed", "succeeded", "release"])
+async def test_finish_sweeps_up_to_the_batch_size(pg_engine, outcome):
+    """
+    Regression: only acquire swept, so a login's second round trip never
+    cleaned anything.
+    """
+    clock = {"now": 0.0}
+    backend = throttle(pg_engine, clock_seconds=lambda: clock["now"], sweep_batch=5)
+    await _expired_client_keys(backend, clock, 3)
+    reservation = await backend.acquire("fresh", IP)  # sweeps the 3 above
+    clock["now"] = 0.0
+    for i in range(12):  # more expired keys, created after that sweep
+        await backend.acquire(f"later{i:03d}", IP)
+    clock["now"] = 61.5
+
+    async def expired_later_keys() -> int:
+        rows = await stored_rows(pg_engine)
+        return sum(1 for row in rows if row.username.startswith("later"))
+
+    assert await expired_later_keys() == 12
+    await getattr(backend, outcome)(reservation)
+    assert await expired_later_keys() == 12 - 5
+
+
+async def test_default_batch_clears_a_large_backlog_in_one_login(pg_engine):
+    clock = {"now": 0.0}
+    backend = throttle(pg_engine, clock_seconds=lambda: clock["now"])  # batch 200
+    await _expired_client_keys(backend, clock, 150)
+    await backend.acquire("fresh", IP)
+    rows = await stored_rows(pg_engine)
+    assert [row.username for row in rows] == ["fresh"]
+
+
+async def test_active_rows_are_never_swept(pg_engine):
+    clock = {"now": 0.0}
+    backend = throttle(pg_engine, clock_seconds=lambda: clock["now"], sweep_batch=1000)
+    for i in range(5):
+        await backend.failed(await backend.acquire(f"expired{i}", IP))
+    clock["now"] = 30.0
+    for i in range(5):
+        await backend.failed(await backend.acquire(f"active{i}", IP))
+    clock["now"] = 61.0  # the first five have expired, the others have not
+    await backend.acquire("fresh", IP)
+    names = {row.username for row in await stored_rows(pg_engine)}
+    assert names == {f"active{i}" for i in range(5)} | {"fresh"}
+
+
+async def test_concurrent_sweeps_skip_locked_rows_instead_of_waiting(pg_engine):
+    clock = {"now": 0.0}
+    backend = throttle(
+        pg_engine, clock_seconds=lambda: clock["now"], sweep_batch=1000, db_timeout_seconds=2.0
+    )
+    await _expired_client_keys(backend, clock, 10)
+    loop = asyncio.get_running_loop()
+    async with pg_engine.connect() as holder:
+        transaction = await holder.begin()
+        # Another sweep (or acquire) holds three of the expired rows.
+        await holder.execute(
+            text(
+                "SELECT 1 FROM public.login_throttle_key "
+                "WHERE username IN ('old000', 'old001', 'old002') FOR UPDATE"
+            )
+        )
+        started = loop.time()
+        await backend.acquire("fresh", IP)
+        elapsed = loop.time() - started
+        remaining = {row.username for row in await stored_rows(pg_engine)}
+        await transaction.rollback()
+    assert elapsed < 0.5  # did not wait for the held rows
+    assert remaining == {"old000", "old001", "old002", "fresh"}
 
 
 # ---------------------------------------------------------------------------
@@ -318,9 +398,25 @@ async def test_sweep_is_bounded_per_write(pg_engine):
 # ---------------------------------------------------------------------------
 
 
-def ip_limit(engine, value="3/minute", clock_seconds=None) -> PostgresIpLimit:
+def ip_limit(engine, value="3/minute", clock_seconds=None, sweep_batch=200) -> PostgresIpLimit:
     now = (lambda: EPOCH + timedelta(seconds=clock_seconds())) if clock_seconds else (lambda: None)
-    return PostgresIpLimit(engine, tuple(parse_many(value)), db_timeout_seconds=3, now=now)
+    return PostgresIpLimit(
+        engine, tuple(parse_many(value)), db_timeout_seconds=3, sweep_batch=sweep_batch, now=now
+    )
+
+
+async def test_ip_limit_sweeps_up_to_the_batch_size(pg_engine):
+    clock = {"now": 0.0}
+    limit = ip_limit(pg_engine, "5/minute", lambda: clock["now"], sweep_batch=4)
+    for i in range(10):
+        assert await limit.hit(f"203.0.113.{i}") is None
+    clock["now"] = 61.0
+    await limit.hit(IP)
+    async with pg_engine.connect() as connection:
+        count = (
+            await connection.execute(text("SELECT count(*) FROM public.login_ip_limit"))
+        ).scalar_one()
+    assert count == 10 - 4 + 1
 
 
 async def test_ip_limit_is_shared_between_instances(pg_engine):

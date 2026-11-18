@@ -69,6 +69,7 @@ _ENV_VARS = {
     "LOGIN_THROTTLE_DB_TIMEOUT_SECONDS": "LOGIN_THROTTLE_DB_TIMEOUT_SECONDS",
     "LOGIN_THROTTLE_LOAD_CACHE_SECONDS": "LOGIN_THROTTLE_LOAD_CACHE_SECONDS",
     "LOGIN_IP_LIMIT_BACKEND": "LOGIN_IP_LIMIT_BACKEND",
+    "LOGIN_THROTTLE_SWEEP_BATCH": "LOGIN_THROTTLE_SWEEP_BATCH",
     "LOGIN": "RATE_LIMIT_LOGIN",
     "SIGNUP": "RATE_LIMIT_SIGNUP",
     "PASSWORD_RESET_REQUEST": "RATE_LIMIT_PASSWORD_RESET_REQUEST",
@@ -130,6 +131,10 @@ class RateLimitSettings(BaseModel):
     # in-memory one), for hosting without a shared rate-limit layer such as
     # WAF rules. Uses LOGIN_THROTTLE_DB_TIMEOUT_SECONDS.
     LOGIN_IP_LIMIT_BACKEND: Literal["memory", "postgres"] = "memory"
+    # Postgres backends: expired rows deleted per call (every login acquire
+    # and finish, every shared IP-limit check). Bounded so one sweep stays a
+    # few milliseconds on the index; larger than the attack-free login rate.
+    LOGIN_THROTTLE_SWEEP_BATCH: int = 200
 
     @field_validator(
         "LOGIN", "SIGNUP", "PASSWORD_RESET_REQUEST", "PASSWORD_RESET_CONFIRM", "REFRESH"
@@ -163,6 +168,7 @@ class RateLimitSettings(BaseModel):
         "LOGIN_MAX_USERNAMES_PER_CLIENT",
         "LOGIN_THROTTLE_MAX_TRACKED",
         "LOGIN_MAX_FAILURES_PER_USERNAME_PREFIX",
+        "LOGIN_THROTTLE_SWEEP_BATCH",
     )
     @classmethod
     def must_be_positive(cls, value: int) -> int:
@@ -333,6 +339,7 @@ def _shared_login_ip_limit(
         async_engine,
         tuple(parse_many(settings.LOGIN)),
         db_timeout_seconds=settings.LOGIN_THROTTLE_DB_TIMEOUT_SECONDS,
+        sweep_batch=settings.LOGIN_THROTTLE_SWEEP_BATCH,
     ).hit
 
 

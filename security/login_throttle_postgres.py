@@ -18,6 +18,12 @@ outlives a PgBouncer checkout). A login makes one acquire and one finish
 round trip; the load query adds at most one per LOGIN_THROTTLE_LOAD_CACHE_
 SECONDS per instance.
 
+Retention: usernames and client keys are stored in plain text (owner's
+choice). Expired rows are deleted in batches of LOGIN_THROTTLE_SWEEP_BATCH
+during logins, on every acquire and finish; on an idle app they stay until
+the next login, and deleted rows remain in Neon's restore history for its
+retention period.
+
 Pressure and capacity come from login_throttle_load(), cached per instance.
 They can therefore lag by up to the cache time, and the table can overshoot
 max_tracked by roughly the attack rate times that time. The bound now
@@ -75,14 +81,15 @@ _ACQUIRE = text(
     "CAST(:max_per_username AS integer), CAST(:max_per_prefix AS integer), "
     "CAST(:max_usernames_per_client AS integer), CAST(:under_pressure AS boolean), "
     "CAST(:full_kinds AS smallint[]), CAST(:lock_timeout_ms AS integer), "
-    "CAST(:now AS timestamptz))"
+    "CAST(:sweep_batch AS integer), CAST(:now AS timestamptz))"
 )
 _FINISH = text(
     "SELECT public.login_throttle_finish("
     "CAST(:outcome AS smallint), CAST(:username AS text), CAST(:client AS text), "
     "CAST(:site AS text), CAST(:at AS timestamptz), CAST(:window AS interval), "
     "CAST(:max_per_username AS integer), CAST(:full_kinds AS smallint[]), "
-    "CAST(:lock_timeout_ms AS integer), CAST(:now AS timestamptz))"
+    "CAST(:lock_timeout_ms AS integer), CAST(:sweep_batch AS integer), "
+    "CAST(:now AS timestamptz))"
 )
 _LOAD = text(
     "SELECT key_kind, active_keys FROM public.login_throttle_load("
@@ -107,6 +114,7 @@ class PostgresLoginThrottle:
         pressure_ratio: float = 0.1,
         db_timeout_seconds: float = 3.0,
         load_cache_seconds: float = 5.0,
+        sweep_batch: int = 200,
         enabled: bool = True,
         now: Callable[[], datetime | None] = lambda: None,
         monotonic: Callable[[], float] = time.monotonic,
@@ -129,6 +137,7 @@ class PostgresLoginThrottle:
         self._load_timeout = db_timeout_seconds / 3
         self._lock_timeout_ms = lock_timeout_ms(db_timeout_seconds)
         self._load_cache_seconds = load_cache_seconds
+        self._sweep_batch = sweep_batch
         # The database clock is used unless a test injects one (p_now).
         self._now = now
         self._monotonic = monotonic
@@ -273,6 +282,7 @@ class PostgresLoginThrottle:
             "under_pressure": self._under_pressure(load),
             "full_kinds": self._full_kinds(load),
             "lock_timeout_ms": self._lock_timeout_ms,
+            "sweep_batch": self._sweep_batch,
             "now": self._now(),
         }
         deadline = asyncio.get_running_loop().time() + self._db_timeout
@@ -303,6 +313,7 @@ class PostgresLoginThrottle:
             # Cached only: recording an outcome must not add a load query.
             "full_kinds": self._full_kinds(self._load),
             "lock_timeout_ms": self._lock_timeout_ms,
+            "sweep_batch": self._sweep_batch,
             "now": self._now(),
         }
         try:
