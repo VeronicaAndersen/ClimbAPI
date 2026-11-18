@@ -1,8 +1,9 @@
 """
 Postgres tests for the shared login throttle and login IP limit.
 
-They run only when TEST_POSTGRES_URL points at a throwaway database with
-the migrations applied, for example:
+The Postgres tests run only when TEST_POSTGRES_URL points at a throwaway
+database with the migrations applied; otherwise only they are skipped and
+the memory side of the contract tests still runs. For example:
 
     createdb -h localhost climbapi_throttle_test
     DATABASE_URL='postgres://<user>@localhost/climbapi_throttle_test?sslmode=disable' \
@@ -31,14 +32,15 @@ _REQUIRED = (
 )
 
 
-@pytest.fixture(autouse=True)
-def _require_test_postgres():
+def _require_test_postgres() -> None:
+    """Skip only what needs Postgres; memory-side contract tests always run."""
     if not TEST_POSTGRES_URL:
         pytest.skip("set TEST_POSTGRES_URL to run the Postgres throttle tests")
 
 
 async def open_pg_engine() -> AsyncEngine:
     """A fresh engine with room for 30+ concurrent connections, tables emptied."""
+    _require_test_postgres()
     engine = create_async_engine(TEST_POSTGRES_URL, pool_size=40, max_overflow=10)
     async with engine.begin() as connection:
         missing = [
