@@ -114,9 +114,15 @@ BEGIN
     blocked_by_client_cap := false;
 
     PERFORM set_config('lock_timeout', p_lock_timeout_ms::text || 'ms', true);
-    -- Always username first, then client; the two-int form keeps the two
-    -- namespaces apart, so this cannot deadlock.
-    PERFORM pg_advisory_xact_lock(1, hashtext(p_username));
+    -- Lock 1 covers everything this call reads and writes for the name:
+    -- the (username, client) key and the (username, /48) key. For IPv6 it is
+    -- taken per /48 (every /64 in it shares the /48 count); otherwise per
+    -- client. Not per username alone: a flood on one name from many
+    -- addresses would then queue the real user's login behind it until
+    -- lock_timeout. Lock 2 (the client) keeps the per-client distinct-
+    -- username count exact. Always lock 1 first, then lock 2; the two-int
+    -- form keeps the namespaces apart, so this cannot deadlock.
+    PERFORM pg_advisory_xact_lock(1, hashtext(p_username || '|' || coalesce(p_site, p_client)));
     PERFORM pg_advisory_xact_lock(2, hashtext(p_client));
     -- Read the clock only once the locks are held.
     v_now := coalesce(p_now, clock_timestamp());

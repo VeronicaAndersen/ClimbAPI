@@ -98,7 +98,10 @@ async def test_held_advisory_lock_times_out_and_fails_closed(pg_engine):
     backend = throttle(pg_engine, db_timeout_seconds=1.0)
     async with pg_engine.connect() as holder:
         transaction = await holder.begin()
-        await holder.execute(text("SELECT pg_advisory_xact_lock(1, hashtext('alice'))"))
+        # The first lock an acquire for (alice, IP) takes.
+        await holder.execute(
+            text("SELECT pg_advisory_xact_lock(1, hashtext(:key))"), {"key": f"alice|{IP}"}
+        )
         loop = asyncio.get_running_loop()
         started = loop.time()
         result = await backend.acquire("alice", IP)
@@ -109,6 +112,40 @@ async def test_held_advisory_lock_times_out_and_fails_closed(pg_engine):
     assert await stored_rows(pg_engine) == []
     # The lock is gone: the next attempt works.
     assert isinstance(await backend.acquire("alice", IP), Reservation)
+
+
+async def test_stuck_login_on_one_client_does_not_delay_another_client(pg_engine):
+    """
+    Regression: every acquire locked the whole username, so a flood on one
+    name from many addresses queued the real user's login past
+    lock_timeout and got it refused with 429.
+    """
+    backend = throttle(pg_engine, db_timeout_seconds=2.0)
+    other = "203.0.113.99"
+    loop = asyncio.get_running_loop()
+    async with pg_engine.connect() as holder:
+        transaction = await holder.begin()
+        # Holding the other client's lock leaves an acquire for (alice,
+        # other) stuck after it has taken its first lock.
+        await holder.execute(text("SELECT pg_advisory_xact_lock(2, hashtext(:c))"), {"c": other})
+        stuck = asyncio.create_task(backend.acquire("alice", other))
+        await asyncio.sleep(0.3)
+        assert not stuck.done()
+        started = loop.time()
+        result = await backend.acquire("alice", IP)
+        elapsed = loop.time() - started
+        await transaction.rollback()
+    assert isinstance(await stuck, Reservation)
+    assert isinstance(result, Reservation)
+    assert elapsed < 0.5
+
+
+async def test_two_64s_in_one_48_still_serialize_on_the_48(pg_engine):
+    """Same /48 lock: the /48 count stays exact for concurrent /64s."""
+    backend = throttle(pg_engine, max_failures=100, max_failures_per_prefix=3)
+    clients = [f"2001:db8:cc:{i:x}::/64" for i in range(2) for _ in range(10)]
+    results = await asyncio.gather(*(backend.acquire("alice", c) for c in clients))
+    assert len(reservations(results)) == 3
 
 
 async def test_slow_load_means_pressure_on_without_429_and_is_cached(pg_engine, monkeypatch):
