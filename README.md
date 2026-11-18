@@ -48,6 +48,14 @@ python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
+The Postgres throttle tests in `tests/pg` are skipped unless `TEST_POSTGRES_URL` points at a throwaway database with the migrations applied. Every test empties the throttle tables, so never use a real database:
+
+```sh
+createdb -h localhost climbapi_throttle_test
+DATABASE_URL='postgres://<user>@localhost/climbapi_throttle_test?sslmode=disable' dbmate --no-dump-schema up
+TEST_POSTGRES_URL='postgresql+asyncpg://<user>@localhost/climbapi_throttle_test' python -m pytest -q
+```
+
 Mail settings are optional for local startup. Without configured mail credentials no reset email is sent: the API logs a warning (at most once a minute) and still answers the request normally. The reset link is never printed or logged, because it contains a live token. To try the reset flow locally, point the `MAIL_*` settings at a local SMTP catcher such as [Mailpit](https://mailpit.axllent.org/).
 
 ## Usernames
