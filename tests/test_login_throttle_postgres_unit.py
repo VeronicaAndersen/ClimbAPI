@@ -4,6 +4,7 @@ failure modes, settings and wiring. Behavior against a real Postgres is in
 tests/pg/.
 """
 
+import asyncio
 import logging
 
 import pytest
@@ -100,6 +101,33 @@ async def test_ip_limit_fails_closed_when_database_is_down(unreachable_engine, c
         assert await limit.hit(CLIENT) == FAIL_CLOSED_RETRY_AFTER_SECONDS
     assert "Shared login IP limit unavailable" in caplog.text
     assert CLIENT not in caplog.text
+
+
+async def test_ip_limit_invalidates_the_connection_on_timeout(caplog):
+    events: list[str] = []
+
+    class SlowConnection:
+        async def execute(self, statement, params):
+            await asyncio.sleep(10)
+
+        async def invalidate(self):
+            events.append("invalidate")
+
+        async def close(self):
+            events.append("close")
+
+    class FakeEngine:
+        def execution_options(self, **kwargs):
+            return self
+
+        async def connect(self):
+            return SlowConnection()
+
+    limit = PostgresIpLimit(FakeEngine(), tuple(parse_many("10/minute")), db_timeout_seconds=0.05)
+    with caplog.at_level(logging.WARNING):
+        assert await limit.hit(CLIENT) == FAIL_CLOSED_RETRY_AFTER_SECONDS
+    # Invalidated before it is released, never returned to the pool as is.
+    assert events == ["invalidate", "close"]
 
 
 # ---------------------------------------------------------------------------

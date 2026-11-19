@@ -64,6 +64,7 @@ from security.client_address import ipv6_site_key
 from security.login_ip_limit_postgres import (
     FAIL_CLOSED_RETRY_AFTER_SECONDS,
     lock_timeout_ms,
+    run_bounded,
 )
 from security.login_throttle import Reservation
 from security.rate_limited_warning import RateLimitedWarning
@@ -246,26 +247,11 @@ class PostgresLoginThrottle:
         """
         Run one statement on its own autocommit connection, within a time limit.
 
-        If the limit (or a cancellation of the request) interrupts the query,
-        the connection is invalidated before it is released: the driver may
-        be left mid-protocol, and such a connection must never go back into
-        the pool for the next login.
+        An interrupted query invalidates its connection (see run_bounded).
         """
         if deadline is None:
             deadline = asyncio.get_running_loop().time() + (timeout or self._db_timeout)
-        connection = None
-        try:
-            async with asyncio.timeout_at(deadline):
-                connection = await self._engine.connect()
-                result = await connection.execute(statement, params)
-                return list(result.all())
-        except (TimeoutError, asyncio.CancelledError):
-            if connection is not None:
-                await connection.invalidate()
-            raise
-        finally:
-            if connection is not None:
-                await connection.close()
+        return await run_bounded(self._engine, statement, params, deadline=deadline)
 
     def _under_pressure(self, load: dict[int, int] | None) -> bool:
         if load is None:
