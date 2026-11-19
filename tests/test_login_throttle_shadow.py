@@ -52,6 +52,8 @@ class FakePostgres:
             raise OSError("database down")
         if self.finish_mode == "hang":
             await asyncio.sleep(10)
+        if self.finish_mode == "slow":
+            await asyncio.sleep(0.3)
         self.finished.append((outcome, reservation))
 
     def clear(self):
@@ -178,7 +180,8 @@ async def test_hung_postgres_adds_at_most_the_wait_bound():
     started = loop.time()
     await shadow.failed(reservation)
     assert loop.time() - started < 0.4
-    assert shadow.counts["postgres_timeouts"] == 1
+    assert shadow.counts["shadow_wait_exceeded"] == 1
+    assert shadow.counts["postgres_timeouts"] == 0
 
 
 async def test_hung_postgres_finish_adds_at_most_the_wait_bound():
@@ -188,7 +191,42 @@ async def test_hung_postgres_finish_adds_at_most_the_wait_bound():
     started = loop.time()
     await shadow.failed(reservation)
     assert loop.time() - started < 0.6
-    assert shadow.counts["postgres_timeouts"] == 1
+    assert shadow.counts["shadow_wait_exceeded"] == 1
+    assert shadow.counts["postgres_timeouts"] == 0
+
+
+async def test_acquire_slower_than_the_wait_is_not_cancelled_and_is_released_late():
+    postgres = FakePostgres(delay=0.3)
+    shadow, _ = make(postgres, wait_seconds=0.1)
+    reservation = await shadow.acquire(USERNAME, IP)
+    await shadow.failed(reservation)  # waits 0.1 s, then gives up waiting
+    assert shadow.counts["shadow_wait_exceeded"] == 1
+    assert shadow.counts["postgres_timeouts"] == 0
+    assert postgres.finished == []
+    await asyncio.sleep(0.4)  # the acquire completes and its reservation is handed back
+    assert [outcome for outcome, _ in postgres.finished] == [RELEASED]
+    assert shadow.counts["postgres_errors"] == 0
+    assert not shadow._tasks
+
+
+async def test_late_acquire_error_is_counted_without_unretrieved_warnings():
+    postgres = FakePostgres(acquire="error", delay=0.3)
+    shadow, _ = make(postgres, wait_seconds=0.1)
+    await shadow.failed(await shadow.acquire(USERNAME, IP))
+    assert shadow.counts["shadow_wait_exceeded"] == 1
+    assert shadow.counts["postgres_errors"] == 0
+    await asyncio.sleep(0.4)
+    assert shadow.counts["postgres_errors"] == 1
+    assert postgres.finished == []
+
+
+async def test_slow_outcome_call_is_not_cancelled():
+    postgres = FakePostgres(finish="slow")
+    shadow, _ = make(postgres, wait_seconds=0.1)
+    await shadow.failed(await shadow.acquire(USERNAME, IP))
+    assert shadow.counts["shadow_wait_exceeded"] == 1
+    await asyncio.sleep(0.4)
+    assert [outcome for outcome, _ in postgres.finished] == [FAILED]  # it still completed
 
 
 async def test_hung_postgres_on_a_memory_blocked_login_is_bounded():
@@ -256,7 +294,7 @@ async def test_summary_is_logged_at_most_once_a_minute_without_personal_data(cap
     assert message.startswith("Login throttle shadow (last 61 s): ")
     assert "calls=2" in message
     assert "postgres_blocked_memory_allowed=2" in message
-    for name in ("postgres_errors=0", "postgres_timeouts=0", "memory_blocked_postgres_allowed=0", "slow=0"):
+    for name in ("postgres_errors=0", "postgres_timeouts=0", "shadow_wait_exceeded=0", "memory_blocked_postgres_allowed=0", "slow=0"):
         assert name in message
     assert USERNAME not in message
     assert IP not in message

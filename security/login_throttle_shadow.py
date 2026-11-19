@@ -10,8 +10,16 @@ production, and the two are compared. Postgres never changes a response:
 * its errors and timeouts are swallowed and counted;
 * on an allowed login its acquire runs in a background task while the
   password hash runs; the outcome waits for it at most SHADOW_WAIT_SECONDS,
-  and each Postgres outcome call is bounded the same way. A login blocked by
-  memory waits at most SHADOW_WAIT_SECONDS for the Postgres comparison.
+  and each Postgres outcome call is waited for the same way. A login blocked
+  by memory waits at most SHADOW_WAIT_SECONDS for the Postgres comparison.
+
+A Postgres call that is still running after that wait is never cancelled: the
+server may already have committed it, and cancelling would leave a reservation
+nobody finishes. It keeps running, bounded by the Postgres backend's own
+database timeout, is counted as shadow_wait_exceeded, and when it returns a
+Reservation late that reservation is released in the background. Late errors
+are counted like any other. postgres_timeouts and postgres_errors therefore
+mean the database itself timed out or failed.
 
 Postgres keeps its own reservation: ShadowReservation carries the memory
 reservation and the Postgres acquire task, so failed/succeeded/release
@@ -22,8 +30,9 @@ Once a minute at most, one WARNING line with counts only (no usernames or
 addresses) summarises the period:
 
     Login throttle shadow (last 60 s): calls=... postgres_errors=...
-    postgres_timeouts=... postgres_blocked_memory_allowed=...
-    memory_blocked_postgres_allowed=... slow=...
+    postgres_timeouts=... shadow_wait_exceeded=...
+    postgres_blocked_memory_allowed=... memory_blocked_postgres_allowed=...
+    slow=...
 
 Cumulative totals are in ShadowLoginThrottle.counts.
 """
@@ -57,6 +66,7 @@ COUNTERS = (
     "calls",
     "postgres_errors",
     "postgres_timeouts",
+    "shadow_wait_exceeded",
     "postgres_blocked_memory_allowed",
     "memory_blocked_postgres_allowed",
     "slow",
@@ -184,10 +194,22 @@ class ShadowLoginThrottle:
             return None
         done, _ = await asyncio.wait({task}, timeout=self._wait)
         if not done:
-            task.cancel()
-            self._count("postgres_timeouts")
+            # Not cancelled: the server may have committed the reservation.
+            # Release whatever the task returns once it is done.
+            self._count("shadow_wait_exceeded")
+            task.add_done_callback(self._release_late)
             return None
         return self._result(task)
+
+    def _release_late(self, task: "asyncio.Task[Any]") -> None:
+        """A reservation that arrived after the wait: hand it back, in the background."""
+        late = self._result(task)  # counts a late error or timeout
+        if isinstance(late, Reservation):
+            release = self._start(self.postgres.finish_or_raise(RELEASED, late))
+            release.add_done_callback(self._count_late_failure)
+
+    def _count_late_failure(self, task: "asyncio.Task[Any]") -> None:
+        self._result(task)
 
     def _result(self, task: "asyncio.Task[Any]") -> Reservation | int | None:
         if task.cancelled():
@@ -200,13 +222,18 @@ class ShadowLoginThrottle:
         return None
 
     async def _quietly(self, call: Awaitable[None]) -> None:
-        """A Postgres outcome call: bounded, errors counted, never raised."""
-        try:
-            await asyncio.wait_for(self._timed(call), timeout=self._wait)
-        except TimeoutError:
-            self._count("postgres_timeouts")
-        except Exception:  # noqa: BLE001 - shadow errors must never reach the login
-            self._count("postgres_errors")
+        """
+        A Postgres outcome call: waited for at most the wait bound, errors
+        counted, never raised. Not cancelled when it is slower: it may already
+        have been applied, so it runs on, bounded by Postgres' own timeout.
+        """
+        task = self._start(call)
+        done, _ = await asyncio.wait({task}, timeout=self._wait)
+        if done:
+            self._result(task)
+        else:
+            self._count("shadow_wait_exceeded")
+            task.add_done_callback(self._count_late_failure)
 
     def _count(self, name: str) -> None:
         self.counts[name] += 1

@@ -128,16 +128,17 @@ By default counters are kept in memory, and the Docker image runs a single uvico
 
 If the database is slow (`LOGIN_THROTTLE_DB_TIMEOUT_SECONDS`) or unavailable, logins are refused with `429` and `Retry-After: 10`: long enough not to hammer a struggling database, short enough that a brief outage or cold start does not lock users out for long. A limit that silently stopped counting would fail open. If only the reading of how full the throttle is fails, the throttle assumes it is under pressure but not full. If recording a login's outcome fails, the login still answers normally; the attempt stays counted as a failure. Warnings for all of these are rate-limited and contain no usernames or addresses.
 
-**Shadow mode for the rollout.** With `LOGIN_THROTTLE_BACKEND=shadow` the in-memory throttle answers every login exactly as with `memory`, and the Postgres throttle runs alongside it, so its tables fill as they would in production and the two can be compared before switching. Postgres never changes a response: its 429s and its fail-closed answers are ignored, its errors and timeouts are only counted, and a login waits at most 0.5 s for it at any point (on an allowed login its check runs while the password is hashed). Each store keeps its own reservation, so both record failures, successes and released attempts. At most once a minute a warning line with counts only (no usernames or addresses) summarises the period:
+**Shadow mode for the rollout.** With `LOGIN_THROTTLE_BACKEND=shadow` the in-memory throttle answers every login exactly as with `memory`, and the Postgres throttle runs alongside it, so its tables fill as they would in production and the two can be compared before switching. Postgres never changes a response: its 429s and its fail-closed answers are ignored, its errors and timeouts are only counted, and a login waits at most 0.5 s for it at any point (on an allowed login its check runs while the password is hashed). A call that is still running after 0.5 s is not cancelled, because the database may already have recorded it: it runs on, limited only by the Postgres backend's own `LOGIN_THROTTLE_DB_TIMEOUT_SECONDS` (3 s by default), and a reservation it returns late is released in the background. Each store keeps its own reservation, so both record failures, successes and released attempts. At most once a minute a warning line with counts only (no usernames or addresses) summarises the period:
 
 ```
-Login throttle shadow (last 60 s): calls=812 postgres_errors=0 postgres_timeouts=1 postgres_blocked_memory_allowed=3 memory_blocked_postgres_allowed=0 slow=2
+Login throttle shadow (last 60 s): calls=812 postgres_errors=0 postgres_timeouts=0 shadow_wait_exceeded=1 postgres_blocked_memory_allowed=3 memory_blocked_postgres_allowed=0 slow=2
 ```
 
 - `calls`: logins checked in the period.
 - `postgres_blocked_memory_allowed`: Postgres would have refused a login that memory let through. Expected in small numbers on several instances, since Postgres sees failures from all of them; a large count means switching to `postgres` would refuse noticeably more logins.
 - `memory_blocked_postgres_allowed`: memory refused a login Postgres would have allowed. Should stay near 0; otherwise the two disagree on the rules.
-- `postgres_errors`, `postgres_timeouts`: the database failed or did not answer within 0.5 s (or `LOGIN_THROTTLE_DB_TIMEOUT_SECONDS`). After a switch to `postgres` these would be refused logins (429).
+- `postgres_errors`, `postgres_timeouts`: the database failed, or did not answer within its own limit (`LOGIN_THROTTLE_DB_TIMEOUT_SECONDS`, 3 s by default). After a switch to `postgres` these would be refused logins (429).
+- `shadow_wait_exceeded`: Postgres had not answered within the shadow's 0.5 s wait. The call was left running, not cancelled, and a late reservation is released. Not an error by itself and not a 429 after a switch: with `postgres` the limit is 3 s, so only calls that also pass that limit (counted in `postgres_timeouts`) or fail would be refused. It shows how often Postgres is slower than 0.5 s, for example on a Neon cold start.
 - `slow`: Postgres calls that took over 0.25 s. They show the latency `postgres` would add.
 
 Switch to `postgres` once errors and timeouts stay at or near 0 and the disagreements are explained.
@@ -253,7 +254,8 @@ Watch the Vercel runtime logs for the line `Login throttle shadow (last 60 s): .
 | Counter | Safe to switch | Meaning if not |
 |---|---|---|
 | `postgres_errors` | 0, or a few isolated ones you can explain | The database call failed. After the switch each of these is a refused login (`429`) |
-| `postgres_timeouts` | 0, or a few isolated ones you can explain | No answer within 0.5 s. A Neon cold start after scale-to-zero can take longer than that (the plan estimated 0.5 to 1 s, not measured); with `postgres` the limit is 3 s |
+| `postgres_timeouts` | 0, or a few isolated ones you can explain | No answer within the backend's own 3 s limit. After the switch each of these is a refused login (`429`) |
+| `shadow_wait_exceeded` | A small share of `calls` | No answer within the shadow's 0.5 s wait. Not refused after the switch (the limit there is 3 s), but a Neon cold start after scale-to-zero can take longer than 0.5 s (the plan estimated 0.5 to 1 s, not measured); if it is frequent, check latency before relying on it |
 | `memory_blocked_postgres_allowed` | Near 0 | The two throttles disagree on the rules |
 | `postgres_blocked_memory_allowed` | A small share of `calls`, and explained by failed-login bursts | Logins that would be refused after the switch |
 | `slow` | A small share of `calls` | Postgres calls over 0.25 s. If most calls are slow, compare the regions of the Vercel function and the Neon project |
