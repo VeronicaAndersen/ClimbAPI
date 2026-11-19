@@ -76,12 +76,17 @@ import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
+from typing import TYPE_CHECKING, Protocol
 
 from schema.climber import normalize_username
 from security.client_address import ipv6_site_key
-from security.rate_limit import rate_limit_settings
+from security.rate_limit import RateLimitSettings, rate_limit_settings
 from security.rate_limited_warning import RateLimitedWarning
 from security.sliding_window import SlidingWindowLog
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncEngine
 
 logger = logging.getLogger(__name__)
 
@@ -92,14 +97,15 @@ class Reservation:
     A reserved login attempt, handed to ``failed``, ``succeeded`` or
     ``release`` once the password check has finished.
 
-    ``at`` is the timestamp recorded for it, unique per throttle, so exactly
-    this attempt can be withdrawn later; None when the throttle is disabled
+    ``at`` is the timestamp recorded for it, unique per key, so exactly this
+    attempt can be withdrawn later: a monotonic float in memory, a database
+    timestamp (microseconds) in Postgres. None when the throttle is disabled
     and nothing was recorded.
     """
 
     username: str
     client_ip: str
-    at: float | None
+    at: float | datetime | None
 
 
 class LoginThrottle:
@@ -367,13 +373,124 @@ class LoginThrottle:
         return waits
 
 
-login_throttle = LoginThrottle(
-    max_failures=rate_limit_settings.LOGIN_MAX_FAILURES,
-    max_failures_per_username=rate_limit_settings.LOGIN_MAX_FAILURES_PER_USERNAME,
-    max_usernames_per_client=rate_limit_settings.LOGIN_MAX_USERNAMES_PER_CLIENT,
-    max_failures_per_prefix=rate_limit_settings.LOGIN_MAX_FAILURES_PER_USERNAME_PREFIX,
-    max_tracked=rate_limit_settings.LOGIN_THROTTLE_MAX_TRACKED,
-    pressure_ratio=rate_limit_settings.LOGIN_THROTTLE_PRESSURE_RATIO,
-    window_seconds=rate_limit_settings.LOGIN_FAILURE_WINDOW_SECONDS,
-    enabled=rate_limit_settings.ENABLED,
-)
+class LoginThrottleBackend(Protocol):
+    """
+    What authenticate_user needs from a login throttle.
+
+    Async so a shared backend (Postgres) can do I/O; see LoginThrottle for
+    the semantics of each method. ``clear`` and ``enabled`` are for tests.
+    """
+
+    enabled: bool
+
+    async def acquire(self, username: str, client_ip: str) -> Reservation | int: ...
+
+    async def failed(self, reservation: Reservation) -> None: ...
+
+    async def succeeded(self, reservation: Reservation) -> None: ...
+
+    async def release(self, reservation: Reservation) -> None: ...
+
+    def clear(self) -> None: ...
+
+
+class MemoryLoginThrottle:
+    """
+    The in-process LoginThrottle behind the async interface.
+
+    Each method calls the synchronous throttle without awaiting anything, so
+    it runs to completion in one step of the event loop: the check-and-
+    reserve in acquire() stays atomic, exactly as before.
+    """
+
+    def __init__(self, throttle: LoginThrottle) -> None:
+        # The underlying throttle, also for tests that inspect its counters.
+        self.throttle = throttle
+
+    @property
+    def enabled(self) -> bool:
+        return self.throttle.enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self.throttle.enabled = value
+
+    async def acquire(self, username: str, client_ip: str) -> Reservation | int:
+        return self.throttle.acquire(username, client_ip)
+
+    async def failed(self, reservation: Reservation) -> None:
+        self.throttle.failed(reservation)
+
+    async def succeeded(self, reservation: Reservation) -> None:
+        self.throttle.succeeded(reservation)
+
+    async def release(self, reservation: Reservation) -> None:
+        self.throttle.release(reservation)
+
+    def clear(self) -> None:
+        self.throttle.clear()
+
+
+def create_login_throttle(
+    settings: RateLimitSettings, engine: "AsyncEngine | None" = None
+) -> LoginThrottleBackend:
+    """
+    The login throttle selected by LOGIN_THROTTLE_BACKEND.
+
+    ``postgres`` and ``shadow`` use the app's database engine (or ``engine``)
+    and need it to be Postgres through asyncpg; anything else stops startup.
+    """
+    backend = settings.LOGIN_THROTTLE_BACKEND
+    if backend == "memory":
+        return _memory_throttle(settings)
+    if backend not in ("postgres", "shadow"):
+        raise RuntimeError(f"LOGIN_THROTTLE_BACKEND={backend!r} is not supported.")
+    postgres = _postgres_throttle(settings, engine)
+    if backend == "postgres":
+        return postgres
+    # Imported here: the memory backend must not need a database.
+    from security.login_throttle_shadow import ShadowLoginThrottle
+
+    return ShadowLoginThrottle(_memory_throttle(settings), postgres)
+
+
+def _memory_throttle(settings: RateLimitSettings) -> MemoryLoginThrottle:
+    return MemoryLoginThrottle(
+        LoginThrottle(
+            max_failures=settings.LOGIN_MAX_FAILURES,
+            max_failures_per_username=settings.LOGIN_MAX_FAILURES_PER_USERNAME,
+            max_usernames_per_client=settings.LOGIN_MAX_USERNAMES_PER_CLIENT,
+            max_failures_per_prefix=settings.LOGIN_MAX_FAILURES_PER_USERNAME_PREFIX,
+            max_tracked=settings.LOGIN_THROTTLE_MAX_TRACKED,
+            pressure_ratio=settings.LOGIN_THROTTLE_PRESSURE_RATIO,
+            window_seconds=settings.LOGIN_FAILURE_WINDOW_SECONDS,
+            enabled=settings.ENABLED,
+        )
+    )
+
+
+def _postgres_throttle(settings: RateLimitSettings, engine: "AsyncEngine | None"):
+    # Imported here: the memory backend must not need a database.
+    from security.login_ip_limit_postgres import require_asyncpg_engine
+    from security.login_throttle_postgres import PostgresLoginThrottle
+
+    if engine is None:
+        from db.config import async_engine as engine
+    require_asyncpg_engine(engine, f"LOGIN_THROTTLE_BACKEND={settings.LOGIN_THROTTLE_BACKEND}")
+    return PostgresLoginThrottle(
+        engine,
+        max_failures=settings.LOGIN_MAX_FAILURES,
+        max_failures_per_username=settings.LOGIN_MAX_FAILURES_PER_USERNAME,
+        max_usernames_per_client=settings.LOGIN_MAX_USERNAMES_PER_CLIENT,
+        max_failures_per_prefix=settings.LOGIN_MAX_FAILURES_PER_USERNAME_PREFIX,
+        max_tracked=settings.LOGIN_THROTTLE_MAX_TRACKED,
+        pressure_ratio=settings.LOGIN_THROTTLE_PRESSURE_RATIO,
+        window_seconds=settings.LOGIN_FAILURE_WINDOW_SECONDS,
+        db_timeout_seconds=settings.LOGIN_THROTTLE_DB_TIMEOUT_SECONDS,
+        load_cache_seconds=settings.LOGIN_THROTTLE_LOAD_CACHE_SECONDS,
+        sweep_batch=settings.LOGIN_THROTTLE_SWEEP_BATCH,
+        enabled=settings.ENABLED,
+    )
+
+
+login_throttle: LoginThrottleBackend = create_login_throttle(rate_limit_settings)

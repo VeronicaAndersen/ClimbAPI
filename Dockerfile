@@ -18,9 +18,13 @@ RUN python -m pip install --upgrade pip wheel \
 # Final stage
 FROM python:3.13-slim
 
-# Runs a single uvicorn worker on purpose: the rate limiter and the login
-# throttle keep their counters in process memory, so several workers would
-# each count separately. Move them to a shared store (Redis) before scaling.
+# Runs a single uvicorn worker (no --workers flag). By default the login
+# throttle and the per-IP route limiter keep their counters in process memory,
+# so several workers would each count separately. With
+# LOGIN_THROTTLE_BACKEND=postgres the workers share the login throttle, and
+# LOGIN_IP_LIMIT_BACKEND=postgres also shares the /auth/login and /auth/token
+# per-IP limit. The other per-IP route limits (signup, password reset,
+# refresh) stay in process memory and count per worker.
 ENV APP_MODULE="main:app" \
     HOST="0.0.0.0" \
     PORT="8080" \

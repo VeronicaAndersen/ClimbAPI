@@ -196,8 +196,8 @@ class TestThrottleSharesKeyAcrossVariants:
 
         typed = "\ufdfa" * 200
         assert (await login(client, typed, "wrong-pw")).status_code == 401
-        keys = list(login_throttle._by_client._entries) + list(
-            login_throttle._by_username._entries
+        keys = list(login_throttle.throttle._by_client._entries) + list(
+            login_throttle.throttle._by_username._entries
         )
         assert keys
         assert all(len(key[0] if isinstance(key, tuple) else key) <= USERNAME_MAX_LENGTH for key in keys)
@@ -214,18 +214,18 @@ class TestThrottleSharesKeyAcrossVariants:
 
         # Enforce the per-client cap always (pressure_ratio=0), with room for
         # two usernames.
-        monkeypatch.setattr(login_throttle, "pressure_threshold", 0)
-        monkeypatch.setattr(login_throttle, "max_usernames_per_client", 2)
+        monkeypatch.setattr(login_throttle.throttle, "pressure_threshold", 0)
+        monkeypatch.setattr(login_throttle.throttle, "max_usernames_per_client", 2)
 
         await signup(client, "admin")
         variants = ["admin", "\uff41dmin", "a\uff44min", "ad\uff4din"]
         for variant in variants:
             assert (await login(client, variant, "wrong-pw")).status_code == 401
-        assert login_throttle._usernames_per_client == {"127.0.0.1": 1}
+        assert login_throttle.throttle._usernames_per_client == {"127.0.0.1": 1}
 
         # A second, different username still fits under the cap...
         assert (await login(client, "bob", "wrong-pw")).status_code == 401
-        assert login_throttle._usernames_per_client == {"127.0.0.1": 2}
+        assert login_throttle.throttle._usernames_per_client == {"127.0.0.1": 2}
         # ...a third one does not.
         resp = await login(client, "carol", "wrong-pw")
         assert resp.status_code == 429

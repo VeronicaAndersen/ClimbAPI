@@ -2,7 +2,9 @@
 Client keys for the IP limits and the login throttle.
 
 Based on the connection address (``request.client.host``); see
-``security.rate_limit`` about running behind a reverse proxy.
+``security.rate_limit`` about running behind a reverse proxy. On Vercel
+(TRUST_VERCEL_HEADERS), the ``x-real-ip`` header that Vercel's edge sets is
+used instead, and the connection address is ignored.
 """
 
 import ipaddress
@@ -22,6 +24,19 @@ _warn_unknown_client = RateLimitedWarning(
     "Client address missing or not an IP address; using the shared 'unknown' "
     "rate-limit key. Check the proxy and FORWARDED_ALLOW_IPS settings",
 )
+# Set once at startup by security.rate_limit from TRUST_VERCEL_HEADERS (kept
+# here as a plain flag so this module does not import the settings module,
+# which imports this one).
+_trust_vercel_headers = False
+_VERCEL_CLIENT_IP_HEADER = "x-real-ip"
+
+
+def configure(*, trust_vercel_headers: bool) -> None:
+    """Choose where client_ip() takes the client address from."""
+    global _trust_vercel_headers
+    _trust_vercel_headers = trust_vercel_headers
+
+
 # One IPv6 customer usually gets at least a /64, so rotating addresses inside
 # it must not give a fresh budget.
 _IPV6_CLIENT_PREFIX = 64
@@ -76,12 +91,35 @@ def normalize_client_address(host: str | None) -> str:
     return str(address)
 
 
+def _vercel_client_address(request: Request) -> str | None:
+    """
+    The client address Vercel's edge put in ``x-real-ip``, or None.
+
+    It must be exactly one header holding one bare IP address. A list, a
+    port, anything unparsable or a missing header gives None; the
+    connection address is never used instead, since on Vercel it is the
+    platform's, shared by all clients.
+    """
+    values = request.headers.getlist(_VERCEL_CLIENT_IP_HEADER)
+    if len(values) != 1:
+        return None
+    value = values[0].strip()
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return None
+    return value
+
+
 def client_ip(request: Request) -> str:
     """
     Client key for the IP limits and the login throttle.
 
-    Based on the connection address; see the module docstring about proxies.
+    Based on the connection address, or on Vercel on the ``x-real-ip``
+    header; see the module docstring about proxies.
     """
+    if _trust_vercel_headers:
+        return normalize_client_address(_vercel_client_address(request))
     host = request.client.host if request.client is not None else None
     return normalize_client_address(host)
 
