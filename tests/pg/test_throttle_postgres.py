@@ -105,7 +105,7 @@ async def test_release_waits_for_the_reservation_lock(pg_engine):
     async with pg_engine.connect() as holder:
         transaction = await holder.begin()
         await holder.execute(
-            text("SELECT pg_advisory_xact_lock(1, hashtext(:key))"), {"key": f"alice|{IP}"}
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 1))"), {"key": f"alice|{IP}"}
         )
         release = asyncio.create_task(backend.release(held))
         await asyncio.sleep(0.3)
@@ -145,7 +145,7 @@ async def test_held_advisory_lock_times_out_and_fails_closed(pg_engine):
         transaction = await holder.begin()
         # The first lock an acquire for (alice, IP) takes.
         await holder.execute(
-            text("SELECT pg_advisory_xact_lock(1, hashtext(:key))"), {"key": f"alice|{IP}"}
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 1))"), {"key": f"alice|{IP}"}
         )
         loop = asyncio.get_running_loop()
         started = loop.time()
@@ -172,7 +172,7 @@ async def test_stuck_login_on_one_client_does_not_delay_another_client(pg_engine
         transaction = await holder.begin()
         # Holding the other client's lock leaves an acquire for (alice,
         # other) stuck after it has taken its first lock.
-        await holder.execute(text("SELECT pg_advisory_xact_lock(2, hashtext(:c))"), {"c": other})
+        await holder.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:c, 2))"), {"c": other})
         stuck = asyncio.create_task(backend.acquire("alice", other))
         await asyncio.sleep(0.3)
         assert not stuck.done()

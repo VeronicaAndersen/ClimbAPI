@@ -53,7 +53,7 @@ BEGIN
         RAISE EXCEPTION 'login_ip_limit_hit: amounts and periods differ in length';
     END IF;
     PERFORM set_config('lock_timeout', p_lock_timeout_ms::text || 'ms', true);
-    PERFORM pg_advisory_xact_lock(4, hashtext(p_client));
+    PERFORM pg_advisory_xact_lock(hashtextextended(p_client, 4));
     v_now := coalesce(p_now, clock_timestamp());
 
     FOR i IN 1 .. coalesce(cardinality(p_amounts), 0) LOOP
@@ -124,8 +124,8 @@ BEGIN
     -- lock_timeout. Lock 2 (the client) keeps the per-client distinct-
     -- username count exact. Always lock 1 first, then lock 2; the two-int
     -- form keeps the namespaces apart, so this cannot deadlock.
-    PERFORM pg_advisory_xact_lock(1, hashtext(p_username || '|' || coalesce(p_site, p_client)));
-    PERFORM pg_advisory_xact_lock(2, hashtext(p_client));
+    PERFORM pg_advisory_xact_lock(hashtextextended(p_username || '|' || coalesce(p_site, p_client), 1));
+    PERFORM pg_advisory_xact_lock(hashtextextended(p_client, 2));
     -- Read the clock only once the locks are held.
     v_now := coalesce(p_now, clock_timestamp());
     v_cutoff := v_now - p_window;
@@ -278,8 +278,8 @@ BEGIN
         END IF;
     ELSE
         PERFORM set_config('lock_timeout', p_lock_timeout_ms::text || 'ms', true);
-        PERFORM pg_advisory_xact_lock(1, hashtext(p_username || '|' || coalesce(p_site, p_client)));
-        PERFORM pg_advisory_xact_lock(2, hashtext(p_client));
+        PERFORM pg_advisory_xact_lock(hashtextextended(p_username || '|' || coalesce(p_site, p_client), 1));
+        PERFORM pg_advisory_xact_lock(hashtextextended(p_client, 2));
         IF p_outcome = 2 THEN
             -- Proving the password resets this client's failures for the name.
             DELETE FROM public.login_throttle_key AS k
