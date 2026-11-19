@@ -38,6 +38,7 @@ Cumulative totals are in ShadowLoginThrottle.counts.
 """
 
 import asyncio
+import functools
 import logging
 import time
 from collections import Counter
@@ -147,8 +148,11 @@ class ShadowLoginThrottle:
 
     async def drain(self) -> None:
         """Wait for Postgres tasks still running (for tests and shutdown)."""
-        if self._tasks:
-            await asyncio.wait(set(self._tasks), timeout=self._wait)
+        # Loop: a late acquire that completes here starts its outcome task.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._wait
+        while self._tasks and (remaining := deadline - loop.time()) > 0:
+            await asyncio.wait(set(self._tasks), timeout=remaining)
 
     async def _finish(
         self,
@@ -161,7 +165,7 @@ class ShadowLoginThrottle:
             return
         # Memory first: it is the record that decides later logins.
         await memory_outcome(reservation.memory)
-        shadow = await self._settle(reservation.postgres_task)
+        shadow = await self._settle(reservation.postgres_task, outcome)
         if isinstance(shadow, int):
             self._count("postgres_blocked_memory_allowed")
         elif isinstance(shadow, Reservation):
@@ -188,25 +192,32 @@ class ShadowLoginThrottle:
             if time.monotonic() - started > self._slow:
                 self._count("slow")
 
-    async def _settle(self, task: "asyncio.Task[Any] | None") -> Reservation | int | None:
-        """The Postgres acquire's answer, or None after an error or timeout."""
+    async def _settle(
+        self, task: "asyncio.Task[Any] | None", late_outcome: int = RELEASED
+    ) -> Reservation | int | None:
+        """
+        The Postgres acquire's answer, or None after an error or timeout.
+
+        A reservation that arrives after the wait is finished with
+        late_outcome, so Postgres still records what happened to the login.
+        """
         if task is None:
             return None
         done, _ = await asyncio.wait({task}, timeout=self._wait)
         if not done:
             # Not cancelled: the server may have committed the reservation.
-            # Release whatever the task returns once it is done.
+            # Finish whatever the task returns once it is done.
             self._count("shadow_wait_exceeded")
-            task.add_done_callback(self._release_late)
+            task.add_done_callback(functools.partial(self._finish_late, late_outcome))
             return None
         return self._result(task)
 
-    def _release_late(self, task: "asyncio.Task[Any]") -> None:
-        """A reservation that arrived after the wait: hand it back, in the background."""
+    def _finish_late(self, outcome: int, task: "asyncio.Task[Any]") -> None:
+        """A reservation that arrived after the wait: finish it, in the background."""
         late = self._result(task)  # counts a late error or timeout
         if isinstance(late, Reservation):
-            release = self._start(self.postgres.finish_or_raise(RELEASED, late))
-            release.add_done_callback(self._count_late_failure)
+            finish = self._start(self.postgres.finish_or_raise(outcome, late))
+            finish.add_done_callback(self._count_late_failure)
 
     def _count_late_failure(self, task: "asyncio.Task[Any]") -> None:
         self._result(task)

@@ -195,16 +195,20 @@ async def test_hung_postgres_finish_adds_at_most_the_wait_bound():
     assert shadow.counts["postgres_timeouts"] == 0
 
 
-async def test_acquire_slower_than_the_wait_is_not_cancelled_and_is_released_late():
+@pytest.mark.parametrize(
+    ("method", "outcome"),
+    [("failed", FAILED), ("succeeded", SUCCEEDED), ("release", RELEASED)],
+)
+async def test_acquire_slower_than_the_wait_is_not_cancelled_and_finished_late(method, outcome):
     postgres = FakePostgres(delay=0.3)
     shadow, _ = make(postgres, wait_seconds=0.1)
     reservation = await shadow.acquire(USERNAME, IP)
-    await shadow.failed(reservation)  # waits 0.1 s, then gives up waiting
+    await getattr(shadow, method)(reservation)  # waits 0.1 s, then gives up waiting
     assert shadow.counts["shadow_wait_exceeded"] == 1
     assert shadow.counts["postgres_timeouts"] == 0
     assert postgres.finished == []
-    await asyncio.sleep(0.4)  # the acquire completes and its reservation is handed back
-    assert [outcome for outcome, _ in postgres.finished] == [RELEASED]
+    await asyncio.sleep(0.4)  # the acquire completes and gets the login's real outcome
+    assert [o for o, _ in postgres.finished] == [outcome]
     assert shadow.counts["postgres_errors"] == 0
     assert not shadow._tasks
 

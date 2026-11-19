@@ -122,8 +122,9 @@ BEGIN
     -- client. Not per username alone: a flood on one name from many
     -- addresses would then queue the real user's login behind it until
     -- lock_timeout. Lock 2 (the client) keeps the per-client distinct-
-    -- username count exact. Always lock 1 first, then lock 2; the two-int
-    -- form keeps the namespaces apart, so this cannot deadlock.
+    -- username count exact. Always lock 1 first, then lock 2, so this
+    -- cannot deadlock. The namespace is the hash seed; a 64-bit collision
+    -- across namespaces is negligible, and lock_timeout bounds it anyway.
     PERFORM pg_advisory_xact_lock(hashtextextended(p_username || '|' || coalesce(p_site, p_client), 1));
     PERFORM pg_advisory_xact_lock(hashtextextended(p_client, 2));
     -- Read the clock only once the locks are held.
