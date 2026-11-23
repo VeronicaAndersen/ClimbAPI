@@ -17,6 +17,8 @@ from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
 from db.config import get_session
 from db.models import Base
 from main import app
+from security.login_throttle import login_throttle
+from security.rate_limit import limiter
 
 # SQLite renders BigInteger as "BIGINT NOT NULL, PRIMARY KEY (id)" — a
 # table-level constraint that does NOT trigger SQLite's rowid alias, so
@@ -28,6 +30,16 @@ SQLiteTypeCompiler.visit_big_integer = lambda self, type_, **kw: "INTEGER"
 # the same in-memory SQLite database.  Without it each pool checkout opens a
 # new :memory: connection (i.e. an empty database), causing IntegrityErrors.
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    """Rate limit state is process-wide; start every test with a clean slate."""
+    limiter.reset()
+    login_throttle.clear()
+    yield
+    limiter.reset()
+    login_throttle.clear()
 
 
 @pytest.fixture()

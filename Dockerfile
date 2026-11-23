@@ -18,15 +18,27 @@ RUN python -m pip install --upgrade pip wheel \
 # Final stage
 FROM python:3.13-slim
 
+# Runs a single uvicorn worker (no --workers flag). By default the login
+# throttle and the per-IP route limiter keep their counters in process memory,
+# so several workers would each count separately. With
+# LOGIN_THROTTLE_BACKEND=postgres the workers share the login throttle, and
+# LOGIN_IP_LIMIT_BACKEND=postgres also shares the /auth/login and /auth/token
+# per-IP limit. The other per-IP route limits (signup, password reset,
+# refresh) stay in process memory and count per worker.
 ENV APP_MODULE="main:app" \
     HOST="0.0.0.0" \
     PORT="8080" \
-    WORKERS="2" \
     LOG_LEVEL="info"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8080
+
+# Addresses of the reverse proxy whose X-Forwarded-For / X-Forwarded-Proto
+# headers uvicorn trusts (comma separated IPs or CIDRs). The rate limits key
+# on the client IP, so set this to your proxy's address. Never use "*" unless
+# the container is only reachable through the proxy.
+ENV FORWARDED_ALLOW_IPS="127.0.0.1,::1"
 
 WORKDIR /app
 
@@ -38,4 +50,5 @@ COPY . .
 RUN useradd -m appuser
 USER appuser
 
-CMD exec python -m uvicorn ${APP_MODULE} --host 0.0.0.0 --port ${PORT}
+CMD exec python -m uvicorn ${APP_MODULE} --host 0.0.0.0 --port ${PORT} \
+    --proxy-headers --forwarded-allow-ips "${FORWARDED_ALLOW_IPS}"
