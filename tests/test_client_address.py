@@ -230,8 +230,9 @@ def test_trusting_vercel_headers_off_a_vercel_deployment_fails_startup(
             monkeypatch.delenv(name, raising=False)
         else:
             monkeypatch.setenv(name, value)
-    with pytest.raises(RuntimeError, match="only allowed on a Vercel deployment"):
+    with pytest.raises(RuntimeError, match="only allowed on a Vercel deployment") as excinfo:
         load_rate_limit_settings()
+    assert f"VERCEL_ENV={vercel_env!r}" in str(excinfo.value)
 
 
 @pytest.mark.parametrize("vercel_env", ["production", "preview"])
