@@ -21,6 +21,16 @@ class ProblemScoreUpsert(BaseModel):
         if self.got_top and self.attempts_to_top is None:
             raise ValueError("attempts_to_top is required when got_top is true")
 
+        # Achieved requires at least one attempt; not achieved allows only None/0
+        if self.got_bonus and self.attempts_to_bonus < 1:
+            raise ValueError("attempts_to_bonus must be >= 1 when got_bonus is true")
+        if self.got_top and self.attempts_to_top < 1:
+            raise ValueError("attempts_to_top must be >= 1 when got_top is true")
+        if not self.got_bonus and self.attempts_to_bonus:
+            raise ValueError("attempts_to_bonus must be 0 or null when got_bonus is false")
+        if not self.got_top and self.attempts_to_top:
+            raise ValueError("attempts_to_top must be 0 or null when got_top is false")
+
         # attempts_to_* cannot exceed attempts_total
         if self.attempts_to_bonus is not None and self.attempts_to_bonus > self.attempts_total:
             raise ValueError("attempts_to_bonus cannot exceed attempts_total")

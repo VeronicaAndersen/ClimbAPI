@@ -13,3 +13,4 @@ fastapi-mail
 aiosmtplib
 limits>=5.8,<6
 anyio>=4,<5
+tzdata

@@ -136,3 +136,28 @@ class TestProblemScoreBulkRequest:
     def test_more_than_8_items_raises(self):
         with pytest.raises(ValidationError):
             ProblemScoreBulkRequest(items=[self._item(i) for i in range(1, 10)])
+
+
+class TestProblemScoreUpsertConsistency:
+    def test_got_bonus_with_zero_attempts_raises(self):
+        with pytest.raises(ValidationError, match="attempts_to_bonus must be >= 1"):
+            ProblemScoreUpsert(**valid_score(got_bonus=True, attempts_to_bonus=0))
+
+    def test_got_top_with_zero_attempts_raises(self):
+        with pytest.raises(ValidationError, match="attempts_to_top must be >= 1"):
+            ProblemScoreUpsert(**valid_score(got_top=True, attempts_to_top=0))
+
+    def test_no_bonus_with_positive_attempts_raises(self):
+        with pytest.raises(ValidationError, match="attempts_to_bonus must be 0 or null"):
+            ProblemScoreUpsert(**valid_score(got_bonus=False, attempts_to_bonus=2))
+
+    def test_no_top_with_positive_attempts_raises(self):
+        with pytest.raises(ValidationError, match="attempts_to_top must be 0 or null"):
+            ProblemScoreUpsert(**valid_score(got_top=False, attempts_to_top=2))
+
+    def test_frontend_zero_attempts_when_not_achieved_is_valid(self):
+        s = ProblemScoreUpsert(**valid_score(
+            got_bonus=False, attempts_to_bonus=0,
+            got_top=False, attempts_to_top=0,
+        ))
+        assert s.attempts_to_top == 0
