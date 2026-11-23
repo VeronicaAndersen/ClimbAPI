@@ -1,4 +1,6 @@
+from datetime import date, datetime
 from typing import Annotated, Dict
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -6,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models import UserScope
 
 from db.config import get_session
-from db.models import Problem, Registration, ProblemScore
+from db.models import Competition, Problem, Registration, ProblemScore
 from schema.problem_score import (
     ProblemScoreUpsert,
     ProblemScoreOut,
@@ -21,6 +23,58 @@ from security.deps import AdminUser, CurrentUser
 router = APIRouter(prefix="/competitions", tags=["scores"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+
+
+SCORING_TZ = ZoneInfo("Europe/Stockholm")
+
+
+def competition_today() -> date:
+    """Today's date in the competition timezone (patched in tests)."""
+    return datetime.now(SCORING_TZ).date()
+
+
+async def _require_edit_window(
+    session: AsyncSession, comp_id: int, current
+) -> None:
+    comp = await session.get(Competition, comp_id)
+    if comp is None:
+        raise HTTPException(status_code=404, detail="Competition not found")
+    if "admin" in current.effective_scopes:
+        return
+    if comp.comp_date != competition_today():
+        raise HTTPException(
+            status_code=403, detail="Scores can only be edited on competition day"
+        )
+
+
+def _zero_score_results(problems) -> list[ProblemScoreBulkResult]:
+    return [
+        ProblemScoreBulkResult(
+            problem_no=prob.problem_no,
+            score=ProblemScoreOutBulk(
+                attempts_total=0,
+                got_bonus=False,
+                got_top=False,
+                attempts_to_bonus=0,
+                attempts_to_top=0,
+                ifsc_score=0.0,
+            ),
+        )
+        for prob in problems
+    ]
+
+
+def _results_with_zero_fill(problems, scores) -> list[ProblemScoreBulkResult]:
+    """One result per problem; zeros where the user has no score row."""
+    by_pid = {ps.problem_id: ps for ps in scores}
+    results = [
+        _build_score_result(p.problem_no, by_pid[p.id])
+        if p.id in by_pid
+        else _zero_score_results([p])[0]
+        for p in problems
+    ]
+    results.sort(key=lambda x: x.problem_no)
+    return results
 
 
 def calculate_ifsc_score(body: ProblemScoreUpsert) -> float:
@@ -82,6 +136,8 @@ async def upsert_problem_score(
         session: SessionDep,
         current: CurrentUser,
 ):
+    await _require_edit_window(session, comp_id, current)
+
     problem = await session.scalar(
         select(Problem).where(
             Problem.competition_id == comp_id,
@@ -129,6 +185,7 @@ async def upsert_problem_scores_batch(
         session: SessionDep,
         current: CurrentUser,
 ):
+    await _require_edit_window(session, comp_id, current)
     await _require_registration(session, comp_id, current.id, level)
 
     wanted_nos = [item.problem_no for item in body.items]
@@ -216,27 +273,7 @@ async def get_problem_scores_batch(
         )
     )).scalars().all()
 
-    if scores:
-        results = [_build_score_result(problem_by_id[ps.problem_id].problem_no, ps) for ps in scores]
-    else:
-        # Return zero-attempt objects if no scores exist yet
-        results = [
-            ProblemScoreBulkResult(
-                problem_no=prob.problem_no,
-                score=ProblemScoreOutBulk(
-                    attempts_total=0,
-                    got_bonus=False,
-                    got_top=False,
-                    attempts_to_bonus=0,
-                    attempts_to_top=0,
-                    ifsc_score=0.0,
-                ),
-            )
-            for prob in problems
-        ]
-
-    results.sort(key=lambda x: x.problem_no)
-    return results
+    return _results_with_zero_fill(problems, scores)
 
 
 @router.get(
@@ -277,26 +314,7 @@ async def get_user_problem_scores_batch(
         )
     )).scalars().all()
 
-    if scores:
-        results = [_build_score_result(problem_by_id[ps.problem_id].problem_no, ps) for ps in scores]
-    else:
-        results = [
-            ProblemScoreBulkResult(
-                problem_no=prob.problem_no,
-                score=ProblemScoreOutBulk(
-                    attempts_total=0,
-                    got_bonus=False,
-                    got_top=False,
-                    attempts_to_bonus=0,
-                    attempts_to_top=0,
-                    ifsc_score=0.0,
-                ),
-            )
-            for prob in problems
-        ]
-
-    results.sort(key=lambda x: x.problem_no)
-    return results
+    return _results_with_zero_fill(problems, scores)
 
 
 @router.get(
