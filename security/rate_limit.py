@@ -200,7 +200,10 @@ def load_rate_limit_settings() -> RateLimitSettings:
         raise RuntimeError(
             "TRUST_VERCEL_HEADERS is only allowed on a Vercel deployment "
             "(VERCEL=1 and VERCEL_ENV=production or preview). Elsewhere, leave it "
-            "unset and use uvicorn's FORWARDED_ALLOW_IPS."
+            "unset and use uvicorn's FORWARDED_ALLOW_IPS. "
+            # Not secrets, and the values tell a missing system variable
+            # apart from a wrong one set by hand.
+            f"Got VERCEL={os.getenv('VERCEL')!r}, VERCEL_ENV={os.getenv('VERCEL_ENV')!r}."
         )
     return settings
 
