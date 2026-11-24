@@ -67,3 +67,54 @@ async def test_registering_twice_returns_409_and_keeps_first_registration(client
     assert resp.json()["detail"] == "Already registered"
     mine = await client.get(f"/api/v1/competition/{comp_id}/registration", headers=climber_headers)
     assert mine.json()["level"] == 1
+
+
+async def _seed_my_registrations(engine):
+    async with async_sessionmaker(engine, expire_on_commit=False)() as s:
+        me = Climber(username="me", password="x", user_scope=UserScope.climber)
+        other = Climber(username="other", password="x", user_scope=UserScope.climber)
+        lonely = Climber(username="lonely", password="x", user_scope=UserScope.climber)
+        season = Season(name="S", year=2026)
+        s.add_all([me, other, lonely, season])
+        await s.flush()
+        old = Competition(name="Old", comp_type=CompType.QUALIFIER,
+                          comp_date=date(2026, 3, 1), season_id=season.id)
+        new = Competition(name="New", comp_type=CompType.QUALIFIER,
+                          comp_date=date(2026, 9, 1), season_id=season.id)
+        s.add_all([old, new])
+        await s.flush()
+        s.add_all([
+            Registration(comp_id=old.id, user_id=me.id, level=1, approved=True),
+            Registration(comp_id=new.id, user_id=me.id, level=2),
+            Registration(comp_id=new.id, user_id=other.id, level=3),
+        ])
+        await s.commit()
+        auth = lambda u: {"Authorization": f"Bearer {create_access_token(u.id)}"}
+        return auth(me), auth(lonely), old.id, new.id
+
+
+async def test_my_registrations_only_own_ordered_by_comp_date_desc(client, engine):
+    me, _, old_id, new_id = await _seed_my_registrations(engine)
+
+    res = await client.get("/api/v1/climber/me/registrations", headers=me)
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert [r["comp_id"] for r in body] == [new_id, old_id]
+    assert [r["competition_name"] for r in body] == ["New", "Old"]
+    assert [(r["level"], r["approved"]) for r in body] == [(2, False), (1, True)]
+
+
+async def test_my_registrations_empty_list_when_none(client, engine):
+    _, lonely, _, _ = await _seed_my_registrations(engine)
+
+    res = await client.get("/api/v1/climber/me/registrations", headers=lonely)
+
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+async def test_my_registrations_requires_auth(client, engine):
+    await _seed_my_registrations(engine)
+
+    assert (await client.get("/api/v1/climber/me/registrations")).status_code == 401

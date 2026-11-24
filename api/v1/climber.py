@@ -87,9 +87,39 @@ async def create_climber(payload: ClimberCreate, admin: AdminUser, session: Sess
     return climber
 
 
+async def _list_registrations_with_competition(
+    session: AsyncSession, climber_id: int,
+) -> list[RegistrationWithCompetitionOut]:
+    """A climber's registrations with competition name/date, newest competition first."""
+    rows = (await session.execute(
+        select(Registration, Competition.name, Competition.comp_date)
+        .join(Competition, Registration.comp_id == Competition.id)
+        .where(Registration.user_id == climber_id)
+        .order_by(Competition.comp_date.desc())
+    )).all()
+
+    return [
+        RegistrationWithCompetitionOut(
+            comp_id=reg.comp_id,
+            competition_name=competition_name,
+            comp_date=comp_date,
+            level=reg.level,
+            approved=reg.approved,
+            created_at=reg.created_at,
+        )
+        for reg, competition_name, comp_date in rows
+    ]
+
+
 @router.get("/me", response_model=ClimberOut)
 async def get_me(current: CurrentUser):
     return current
+
+
+@router.get("/me/registrations", response_model=list[RegistrationWithCompetitionOut])
+async def get_my_registrations(current: CurrentUser, session: Session):
+    """List the current user's own competition registrations, newest competition first."""
+    return await _list_registrations_with_competition(session, current.id)
 
 
 @router.patch("/me", response_model=ClimberOut)
@@ -205,21 +235,4 @@ async def get_climber_registrations(climber_id: int, admin: AdminUser, session: 
     if climber is None:
         raise HTTPException(status_code=404, detail="Climber not found")
 
-    rows = (await session.execute(
-        select(Registration, Competition.name, Competition.comp_date)
-        .join(Competition, Registration.comp_id == Competition.id)
-        .where(Registration.user_id == climber_id)
-        .order_by(Competition.comp_date.desc())
-    )).all()
-
-    return [
-        RegistrationWithCompetitionOut(
-            comp_id=reg.comp_id,
-            competition_name=competition_name,
-            comp_date=comp_date,
-            level=reg.level,
-            approved=reg.approved,
-            created_at=reg.created_at,
-        )
-        for reg, competition_name, comp_date in rows
-    ]
+    return await _list_registrations_with_competition(session, climber_id)
