@@ -161,7 +161,7 @@ async def delete_season(
 ):
     season = await session.get(Season, season_id)
     if not season:
-        raise HTTPException(status_code=404, detail="Competition not found")
+        raise HTTPException(status_code=404, detail="Season not found")
     await session.delete(season)
     await session.commit()
     return None
