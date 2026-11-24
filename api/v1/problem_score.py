@@ -348,12 +348,13 @@ async def get_level_problem_stats(
 
     problem_ids = [p.id for p in problems]
 
-    # Count total competitors per problem (from registrations)
+    # Count total competitors per problem: approved registrations only, as the leaderboard does.
     registrations = (await session.execute(
         select(Registration)
         .where(
             Registration.comp_id == comp_id,
             Registration.level == level,
+            Registration.approved.is_(True),
         )
     )).scalars().all()
     total_competitors = len(registrations)
