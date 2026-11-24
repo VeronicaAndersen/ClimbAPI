@@ -30,11 +30,12 @@ async def _seed(engine):
         ])
         await s.commit()
         headers = {"Authorization": f"Bearer {create_access_token(admin.id)}"}
-        return comp.id, headers
+        climber_headers = {"Authorization": f"Bearer {create_access_token(named.id)}"}
+        return comp.id, headers, climber_headers
 
 
 async def test_registrations_include_climber_first_and_last_name(client, engine):
-    comp_id, headers = await _seed(engine)
+    comp_id, headers, _ = await _seed(engine)
 
     res = await client.get(f"/api/v1/competition/{comp_id}/registrations", headers=headers)
 
@@ -44,3 +45,11 @@ async def test_registrations_include_climber_first_and_last_name(client, engine)
     assert by_username["named"]["lastname"] == "Lind"
     assert by_username["unnamed"]["firstname"] is None
     assert by_username["unnamed"]["lastname"] is None
+
+
+async def test_registrations_with_names_are_admin_only(client, engine):
+    comp_id, _, climber_headers = await _seed(engine)
+    url = f"/api/v1/competition/{comp_id}/registrations"
+
+    assert (await client.get(url)).status_code == 401
+    assert (await client.get(url, headers=climber_headers)).status_code == 403
