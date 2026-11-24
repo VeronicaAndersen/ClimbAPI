@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.config import get_session
 from db.models import Climber, Competition, Problem, ProblemScore, Registration, Season
+from schema.climber import display_name
 from schema.season import (
     SeasonCreate,
     SeasonOut,
@@ -114,11 +115,7 @@ async def get_season_standings(season_id: int, session: SessionDep, _: AdminUser
         entries = [
             SeasonStandingsEntry(
                 rank=r["rank"],
-                name=(
-                    f"{r['firstname']} {r['lastname']}".strip()
-                    if r["firstname"] or r["lastname"]
-                    else r["username"]
-                ),
+                name=display_name(r["firstname"], r["lastname"], r["username"]),
                 total_score=r["total_score"],
             )
             for r in group

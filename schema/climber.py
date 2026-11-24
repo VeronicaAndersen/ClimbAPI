@@ -12,6 +12,14 @@ from schema.auth import (
 )
 
 
+def display_name(firstname: str | None, lastname: str | None, username: str) -> str:
+    """Name shown on leaderboards: the name parts that are set, else the username.
+
+    Either part may be missing, so formatting both directly would show "None".
+    """
+    return " ".join(part for part in (firstname, lastname) if part) or username
+
+
 # Two username rules, on purpose:
 #
 # * New usernames (signup, and a username that is set or changed through a
