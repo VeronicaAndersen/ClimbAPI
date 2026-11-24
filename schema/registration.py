@@ -24,6 +24,8 @@ class RegistrationWithClimberOut(BaseModel):
     approved: bool
     created_at: datetime
     climber_name: str
+    firstname: str | None = None
+    lastname: str | None = None
 
     model_config = {"from_attributes": True}
 
