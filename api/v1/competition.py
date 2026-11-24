@@ -9,6 +9,7 @@ from sqlalchemy.orm import InstrumentedAttribute
 
 from db.config import get_session
 from db.models import Climber, Competition, Problem, ProblemScore, Registration
+from schema.climber import display_name
 from schema.competition import (
     CompetitionCreate,
     CompetitionOut,
@@ -188,11 +189,7 @@ async def get_leaderboard(comp_id: int, session: SessionDep, _: AdminUser):
         entries = [
             LeaderboardEntry(
                 rank=r["rank"],
-                name=(
-                    f"{r['firstname']} {r['lastname']}".strip()
-                    if r["firstname"] or r["lastname"]
-                    else r["username"]
-                ),
+                name=display_name(r["firstname"], r["lastname"], r["username"]),
                 total_score=r["total_score"],
             )
             for r in group
