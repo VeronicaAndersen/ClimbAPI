@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
 from db.config import get_session
-from db.models import Climber, Competition, Problem, ProblemScore, Registration
+from db.models import Climber, Competition, Problem, ProblemScore, Registration, total_ifsc_score
 from schema.climber import display_name
 from schema.competition import (
     CompetitionCreate,
@@ -130,7 +130,7 @@ async def get_leaderboard(comp_id: int, session: SessionDep, _: AdminUser):
     scores_by_level = (
         select(
             ProblemScore.user_id,
-            func.sum(ProblemScore.ifsc_score).label("total_score"),
+            total_ifsc_score().label("total_score"),
             Problem.level_no,
         )
         .join(Problem, Problem.id == ProblemScore.problem_id)
