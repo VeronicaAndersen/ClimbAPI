@@ -167,7 +167,7 @@ async def get_all_registrations(
         raise HTTPException(status_code=404, detail="Competition not found")
 
     rows = (await session.execute(
-        select(Registration, Climber.username)
+        select(Registration, Climber.username, Climber.firstname, Climber.lastname)
         .join(Climber, Registration.user_id == Climber.id)
         .where(Registration.comp_id == comp_id)
         .order_by(Registration.created_at.desc())
@@ -181,8 +181,10 @@ async def get_all_registrations(
             approved=reg.approved,
             created_at=reg.created_at,
             climber_name=climber_name,
+            firstname=firstname,
+            lastname=lastname,
         )
-        for reg, climber_name in rows
+        for reg, climber_name, firstname, lastname in rows
     ]
 
 
