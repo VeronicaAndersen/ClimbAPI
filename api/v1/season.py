@@ -6,7 +6,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.config import get_session
-from db.models import Climber, Competition, Problem, ProblemScore, Registration, Season
+from db.models import Climber, Competition, Problem, ProblemScore, Registration, Season, total_ifsc_score
 from schema.climber import display_name
 from schema.season import (
     SeasonCreate,
@@ -76,7 +76,7 @@ async def get_season_standings(season_id: int, session: SessionDep, _: AdminUser
         select(
             Registration.user_id,
             Registration.level,
-            func.sum(ProblemScore.ifsc_score).label("total_score"),
+            total_ifsc_score().label("total_score"),
         )
         .join(Competition, and_(Competition.id == Registration.comp_id, Competition.season_id == season_id))
         .join(Problem, and_(Problem.competition_id == Registration.comp_id, Problem.level_no == Registration.level))

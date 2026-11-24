@@ -11,9 +11,11 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     Text,
     UniqueConstraint,
     BigInteger,
+    cast,
     func,
 )
 from sqlalchemy.orm import (
@@ -161,3 +163,12 @@ class ProblemScore(Base):
     competition: Mapped["Competition"] = relationship(back_populates="problem_scores")
     problem: Mapped["Problem"] = relationship(back_populates="scores")
     user: Mapped["Climber"] = relationship(back_populates="problem_scores")
+
+
+def total_ifsc_score():
+    """SUM of ProblemScore.ifsc_score, rounded to tenths.
+
+    Every score is a whole number of tenths, but summing floats is inexact
+    (25.0 + 24.6 != 24.9 + 24.7), so equal totals could get different ranks.
+    """
+    return func.round(cast(func.sum(ProblemScore.ifsc_score), Numeric), 1)
