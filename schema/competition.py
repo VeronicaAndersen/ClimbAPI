@@ -1,6 +1,5 @@
 from datetime import date
 from enum import Enum
-from typing import Literal
 from typing import Optional
 
 from pydantic import BaseModel, conint, model_validator

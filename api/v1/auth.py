@@ -190,7 +190,7 @@ async def signup(request: Request, payload: ClimberCreate, session: Session):
         await session.commit()
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(status_code=409, detail="Username is already taken")
+        raise HTTPException(status_code=409, detail="Username is already taken") from None
 
     await session.refresh(climber)
     return AuthOut(
@@ -310,7 +310,7 @@ async def refresh(request: Request, body: RefreshRequest, session: Session):
     try:
         payload = decode_token(body.refresh_token)
     except Exception:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token") from None
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Wrong token type")
     uid = int(payload["sub"])

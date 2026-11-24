@@ -3,7 +3,7 @@ from enum import Enum
 from fastapi import Depends, HTTPException, status, Security
 from fastapi.security import OAuth2PasswordBearer, SecurityScopes
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Iterable, Set, Dict
+from typing import Set, Dict
 
 from db.config import get_session
 from db.models import Climber
@@ -43,7 +43,7 @@ async def get_current_user(security_scopes: SecurityScopes,
     try:
         payload = decode_token(token)
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        raise HTTPException(status_code=401, detail="Invalid or expired token") from None
 
     if payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Wrong token type")

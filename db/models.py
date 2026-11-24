@@ -1,7 +1,7 @@
 from datetime import datetime, date
 from enum import Enum as PyEnum
 from typing import List, Optional
-from sqlalchemy import Enum as PgEnum, String, Float
+from sqlalchemy import Enum as PgEnum, Float
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -11,7 +11,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    Numeric,
     Text,
     UniqueConstraint,
     BigInteger,
