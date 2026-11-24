@@ -2,6 +2,7 @@ from typing import Annotated, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.config import get_session
@@ -65,18 +66,14 @@ async def register_self(
     if not await session.get(Competition, comp_id):
         raise HTTPException(status_code=404, detail="Competition not found")
 
-    already = await session.scalar(
-        select(func.count()).select_from(Registration).where(
-            Registration.comp_id == comp_id,
-            Registration.user_id == current.id,
-        )
-    )
-    if already:
-        raise HTTPException(status_code=409, detail="Already registered")
-
+    # The (comp_id, user_id) key rejects duplicates, including two concurrent requests.
     reg = Registration(comp_id=comp_id, user_id=current.id, level=body.level)
     session.add(reg)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Already registered") from None
     await session.refresh(reg)
 
     await _create_empty_scores(session, comp_id, current.id, body.level)

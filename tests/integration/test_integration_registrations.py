@@ -53,3 +53,17 @@ async def test_registrations_with_names_are_admin_only(client, engine):
 
     assert (await client.get(url)).status_code == 401
     assert (await client.get(url, headers=climber_headers)).status_code == 403
+
+
+async def test_registering_twice_returns_409_and_keeps_first_registration(client, engine):
+    # The unique (comp_id, user_id) key decides, so a concurrent duplicate takes this path too.
+    comp_id, _, climber_headers = await _seed(engine)
+
+    resp = await client.post(
+        f"/api/v1/competition/{comp_id}/register", json={"level": 3}, headers=climber_headers,
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == "Already registered"
+    mine = await client.get(f"/api/v1/competition/{comp_id}/registration", headers=climber_headers)
+    assert mine.json()["level"] == 1
