@@ -81,7 +81,7 @@ async def create_climber(payload: ClimberCreate, admin: AdminUser, session: Sess
         await session.commit()
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(status_code=409, detail="Username is already taken")
+        raise HTTPException(status_code=409, detail="Username is already taken") from None
 
     await session.refresh(climber)
     return climber
@@ -114,7 +114,7 @@ async def update_me(payload: ClimberUpdate, current: CurrentUser, session: Sessi
         await session.refresh(current)
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(status_code=409, detail="Username is already taken")
+        raise HTTPException(status_code=409, detail="Username is already taken") from None
 
     return current
 
@@ -160,7 +160,7 @@ async def update_climber(climber_id: int, payload: AdminClimberUpdate, admin: Ad
         await session.refresh(climber)
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(status_code=409, detail="Username is already taken")
+        raise HTTPException(status_code=409, detail="Username is already taken") from None
 
     return climber
 
