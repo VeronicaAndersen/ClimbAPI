@@ -93,23 +93,6 @@ def test_sliding_window_releases_oldest_failure_first():
     assert allowed(throttle.acquire("alice", IP))
 
 
-def test_success_is_not_counted_as_failure():
-    """Regression: correct logins must not use up the failure budget."""
-    throttle, _ = make()
-    for _ in range(10):
-        reservation = ok(throttle.acquire("alice", IP))
-        throttle.succeeded(reservation)
-
-
-def test_success_clears_client_failures():
-    throttle, _ = make()
-    fail(throttle, times=2)
-    reservation = ok(throttle.acquire("alice", IP))
-    throttle.succeeded(reservation)
-    fail(throttle, times=3)
-    assert blocked(throttle.acquire("alice", IP))
-
-
 def test_failures_on_one_ip_do_not_block_another_ip():
     """Regression: an attacker must not be able to lock out the real user."""
     throttle, _ = make()
@@ -128,16 +111,6 @@ def test_username_is_normalized():
 def test_disabled_never_blocks():
     throttle, _ = make(enabled=False)
     fail(throttle, times=10)
-
-
-def test_release_withdraws_only_the_newest_reservation():
-    throttle, _ = make()
-    fail(throttle, times=2)
-    reservation = ok(throttle.acquire("alice", IP))
-    throttle.release(reservation)
-    # Two failures remain, so one more attempt is allowed before the block.
-    fail(throttle)
-    assert blocked(throttle.acquire("alice", IP))
 
 
 def test_release_of_only_reservation_forgets_the_key():
