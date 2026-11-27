@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models import UserScope
 
 from db.config import get_session
-from db.models import Competition, Problem, Registration, ProblemScore
+from db.models import Climber, Competition, Problem, Registration, ProblemScore
 from schema.problem_score import (
     ProblemScoreUpsert,
     ProblemScoreOut,
@@ -16,6 +16,7 @@ from schema.problem_score import (
     ProblemScoreBulkRequest,
     ProblemScoreOutBulk,
     ProblemStats,
+    StatsClimber,
     LevelStatsResponse
 )
 from security.deps import AdminUser, CurrentUser
@@ -373,31 +374,51 @@ async def get_level_problem_stats(
         )
     )).scalars().all() if registered_user_ids else []
 
-    # Aggregate statistics by problem
-    stats_by_problem: Dict[int, Dict[str, int]] = {
-        p.id: {"got_top": 0, "got_bonus": 0} for p in problems
-    }
+    # Load the climbers behind the scores in one query (no N+1).
+    climbers_by_id: Dict[int, Climber] = {}
+    if registered_user_ids:
+        climbers_by_id = {
+            c.id: c
+            for c in (await session.execute(
+                select(Climber).where(Climber.id.in_(registered_user_ids))
+            )).scalars().all()
+        }
+
+    def _sort_key(c: Climber):
+        # Sort on the name the admin sees: full name, or username when it has none.
+        shown = " ".join(n for n in (c.firstname, c.lastname) if n) or c.username
+        return (shown.lower(), c.username.lower())
+
+    # Aggregate who got top / bonus per problem
+    top_by_problem: Dict[int, list[Climber]] = {p.id: [] for p in problems}
+    bonus_by_problem: Dict[int, list[Climber]] = {p.id: [] for p in problems}
 
     for score in scores:
+        climber = climbers_by_id.get(score.user_id)
+        if climber is None:
+            continue
         if score.got_top:
-            stats_by_problem[score.problem_id]["got_top"] += 1
+            top_by_problem[score.problem_id].append(climber)
         if score.got_bonus:
-            stats_by_problem[score.problem_id]["got_bonus"] += 1
+            bonus_by_problem[score.problem_id].append(climber)
 
     # Build response
     problem_stats = []
     for problem in problems:
-        stats = stats_by_problem[problem.id]
-        got_top_pct = (stats["got_top"] / total_competitors * 100) if total_competitors > 0 else 0
-        got_bonus_pct = (stats["got_bonus"] / total_competitors * 100) if total_competitors > 0 else 0
+        top = sorted(top_by_problem[problem.id], key=_sort_key)
+        bonus = sorted(bonus_by_problem[problem.id], key=_sort_key)
+        got_top_pct = (len(top) / total_competitors * 100) if total_competitors > 0 else 0
+        got_bonus_pct = (len(bonus) / total_competitors * 100) if total_competitors > 0 else 0
 
         problem_stats.append(ProblemStats(
             problem_no=problem.problem_no,
             total_competitors=total_competitors,
-            got_top_count=stats["got_top"],
-            got_bonus_count=stats["got_bonus"],
+            got_top_count=len(top),
+            got_bonus_count=len(bonus),
             got_top_percentage=round(got_top_pct, 2),
             got_bonus_percentage=round(got_bonus_pct, 2),
+            got_top_climbers=[StatsClimber.model_validate(c, from_attributes=True) for c in top],
+            got_bonus_climbers=[StatsClimber.model_validate(c, from_attributes=True) for c in bonus],
         ))
 
     return LevelStatsResponse(level=level, problems=problem_stats)

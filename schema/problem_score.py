@@ -80,6 +80,13 @@ class ProblemScoreBulkResult(BaseModel):
     problem_no: int
     score: ProblemScoreOutBulk
     
+class StatsClimber(BaseModel):
+    id: int
+    username: str
+    firstname: Optional[str] = None
+    lastname: Optional[str] = None
+
+
 class ProblemStats(BaseModel):
     problem_no: int
     total_competitors: int
@@ -87,6 +94,8 @@ class ProblemStats(BaseModel):
     got_bonus_count: int
     got_top_percentage: float
     got_bonus_percentage: float
+    got_top_climbers: list[StatsClimber]
+    got_bonus_climbers: list[StatsClimber]
 
 class LevelStatsResponse(BaseModel):
     level: int
