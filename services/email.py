@@ -24,7 +24,7 @@ class EmailSettings:
     MAIL_FROM: str = os.getenv("MAIL_FROM", "")
     MAIL_PORT: int = int(os.getenv("MAIL_PORT", "587"))
     MAIL_SERVER: str = os.getenv("MAIL_SERVER", "smtp.gmail.com")
-    MAIL_FROM_NAME: str = os.getenv("MAIL_FROM_NAME", "Grepp")
+    MAIL_FROM_NAME: str = os.getenv("MAIL_FROM_NAME", "Greppmästerskapen")
     MAIL_STARTTLS: bool = os.getenv("MAIL_STARTTLS", "true").lower() == "true"
     MAIL_SSL_TLS: bool = os.getenv("MAIL_SSL_TLS", "false").lower() == "true"
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "")
@@ -141,7 +141,7 @@ async def send_password_reset_email(email: str, token: str, firstname: Optional[
         # makes MessageSchema raise a ValidationError whose text includes the
         # address, which must not reach the background-task error log.
         message = MessageSchema(
-            subject="Återställ ditt lösenord - Grepp",
+            subject="Återställ ditt lösenord - Greppmästerskapen",
             recipients=[email],
             body=html_content,
             subtype=MessageType.html,
